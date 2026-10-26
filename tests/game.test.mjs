@@ -2,7 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  buildDeck, createLobby, startGame, play, draw, pass, callUno, canStart, canJump, couldGoToOne,
+  buildDeck, createLobby, startGame, play, draw, pass, callUno, catchUno, canStart, canJump, couldGoToOne,
   checkPlay, viewFor, autoMove, nextSeat, topCard, sortHand, points, gameTime, formatTime, DECK_SIZE, RULE_KEYS,
 } from '../js/game.js';
 
@@ -37,7 +37,7 @@ function setup(s, { hands, top, turn = 0, deck = null }) {
   s.dir = 1;
   s.pending = 0;
   s.drawn = null;
-  s.exposed = -1;
+  s.exposed = {};
   if (deck) s.deck = deck;
 }
 
@@ -301,22 +301,45 @@ test('UNO: say it before the play that leaves one card', () => {
   assert.equal(s.armed[0], false);
 });
 
-test('UNO: forget it and draw 2 on the spot; saying it late is no use', () => {
+test('UNO forgotten: no penalty until someone catches it (Contre-UNO)', () => {
   const s = game(3);
   const a = card('r', '1'), b = card('r', '2');
-  setup(s, { hands: { 0: [a, b], 1: [card('r', '3'), card('y', '3')], 2: [card('g', '1'), card('g', '2')] }, top: card('r', '9') });
+  setup(s, { hands: { 0: [a, b], 1: [card('r', '3'), card('y', '3'), card('y', '4')], 2: [card('g', '1'), card('g', '2')] }, top: card('r', '9') });
   play(s, 0, [a.id]);
-  assert.equal(s.hands[0].length, 3, '1 card + 2 penalty');
-  assert.ok(!s.uno[0]);
-  assert.equal(s.stats[0].forgot, 1);
-  assert.ok(s.events.some((e) => e.kind === 'forgot' && e.seat === 0));
-  assert.equal(s.turn, 1, 'the turn still moves on');
-  assert.match(s.note, /forgot to say UNO/);
+  assert.equal(s.hands[0].length, 1, 'no automatic penalty');
+  assert.equal(s.exposed[0], true);
+  assert.ok(!callUno(s, 0), 'saying it now is too late');
+  // Still catchable after other players have played.
+  play(s, 1, [s.hands[1][0].id]);
+  assert.equal(s.exposed[0], true);
+  assert.throws(() => catchUno(s, 0, 0), /Nobody to catch/, "can't catch yourself");
+  assert.throws(() => catchUno(s, 1, 2), /Nobody to catch/, 'only exposed players');
+  catchUno(s, 2, 0);
+  assert.equal(s.hands[0].length, 3);
+  assert.ok(!s.exposed[0]);
+  assert.equal(s.stats[0].caught, 1);
+  assert.equal(s.events.at(-2).kind, 'catch');
+  assert.throws(() => catchUno(s, 1, 0), /Nobody to catch/, 'only once');
+});
 
-  // With one card left there's nothing to say any more.
+test('UNO forgotten: the exposure ends when you hold more cards, or win', () => {
+  const s = game(2);
+  const a = card('r', '1');
+  setup(s, { hands: { 0: [a, card('g', '5')], 1: [card('b', '1'), card('y', '2')] }, top: card('r', '9'), deck: [...s.deck, card('y', '8')] });
+  play(s, 0, [a.id]);
+  assert.equal(s.exposed[0], true);
+  s.turn = 0;
+  draw(s, 0); // a yellow 8: not playable on red
+  assert.ok(!s.exposed[0], 'two cards again: nothing to catch');
+
   const t = game(2);
-  setup(t, { hands: { 0: [card('b', '1')], 1: [card('g', '1'), card('g', '2')] }, top: card('r', '9') });
-  assert.ok(!callUno(t, 0));
+  const last = card('r', '1');
+  setup(t, { hands: { 0: [card('r', '5'), last], 1: [card('b', '1'), card('y', '2')] }, top: card('r', '9') });
+  play(t, 0, [t.hands[0][0].id]);
+  t.turn = 0;
+  play(t, 0, [last.id]);
+  assert.equal(t.phase, 'ended', 'an exposed player can still go out');
+  assert.deepEqual(t.exposed, {});
 });
 
 test('UNO: needed for doubles and jump-ins too; an unused call expires', () => {
@@ -336,7 +359,7 @@ test('UNO: needed for doubles and jump-ins too; an unused call expires', () => {
   play(t, 0, [x.id]);
   assert.ok(couldGoToOne(t, 2, t.hands[2]));
   play(t, 2, [y.id]);
-  assert.equal(t.hands[2].length, 3, 'forgot on a jump-in costs 2 as well');
+  assert.equal(t.exposed[2], true, 'a jump-in to one card needs UNO too');
 
   // Saying UNO and then drawing instead: the call is gone.
   const u = game(2);
@@ -484,6 +507,8 @@ test('bot games under all rule combinations', () => {
             continue;
           }
         }
+        const exposed = Object.keys(s.exposed).map(Number);
+        if (exposed.length && r() < 0.5) catchUno(s, (exposed[0] + 1) % players, exposed[0], r);
         const seat = s.turn;
         const m = autoMove(s, seat);
         if (m.kind === 'play') {

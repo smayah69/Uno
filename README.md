@@ -30,26 +30,42 @@ Vercel can't keep WebSocket connections open, so there is no game server:
   (or through PeerJS's TURN relay on strict NATs).
 
 ```
-js/game.js   rules engine (pure, unit tested): deck, turns, house rules, scoring, per-player views
-js/cards.js  card faces and backs (HTML + CSS, no images)
-js/parts.js  avatars, turn timer ring, scoreboard
-js/net.js    transports: PeerJS (prod) and BroadcastChannel (?local=1, testing)
-js/sound.js  synthesized sound effects (Web Audio)
-js/text.js   name and chat sanitizing
-js/main.js   host / client controllers and the UI
-fonts/       Fredoka (SIL Open Font License)
+js/game.js     rules engine (pure, unit tested): deck, turns, house rules, scoring, per-player views
+js/table.js    the table: seats, pile, deck, your hand, buttons, card animations
+js/cards.js    card faces and backs (HTML + CSS, no images)
+js/parts.js    avatars, turn timer ring, scoreboard
+js/net.js      transports: PeerJS (prod) and BroadcastChannel (?local=1, testing)
+js/sound.js    synthesized sound effects (Web Audio)
+js/text.js     name and chat sanitizing
+js/main.js     host / client controllers, home, lobby, chat
+js/sandbox.js  the /sandbox test page
+fonts/         Fredoka (SIL Open Font License)
 ```
 
 ## Rules
 
 Standard Uno with the 108-card deck: 7 cards each, match the top card by color or by number/symbol,
-or play a Wild. Skip, Reverse (works like a Skip with 2 players), +2, Wild, Wild +4. The game opens on
-a number card. Can't (or don't want to) play? Tap the **deck** next to your UNO button to draw one card.
-If it fits you can play it straight away, or keep it.
+or play a Wild. The game opens on a number card. Can't (or don't want to) play? Tap the **deck** next
+to your UNO button to draw one card. If it fits you can play it straight away, or keep it.
 
-**UNO:** with two cards left you have to press **UNO!** *before* the play that leaves you with one.
-Forget, and you draw 2 on the spot. The button lights up when it's needed, and the `U` key presses it
-(`D` draws). This also counts for jump-ins and doubles that take you down to one card.
+### Special cards
+
+| Card | In the deck | What it does | Points |
+| --- | --- | --- | --- |
+| **Skip** ⊘ | 2 per color (8) | The next player loses their turn. | 20 |
+| **Reverse** ⇄ | 2 per color (8) | Play changes direction. With 2 players it works like a Skip (you play again). | 20 |
+| **+2** | 2 per color (8) | The next player draws 2 and loses their turn. With the **+2 combo** rule they can answer with a +2 instead. | 20 |
+| **Wild** | 4 | Play it on anything and pick the color to play next. | 50 |
+| **Wild +4** | 4 | Pick the color; the next player draws 4 and loses their turn. Can be played any time (no challenge rule), and doesn't stack. | 50 |
+
+Numbers 0-9 (one 0 and two of each 1-9 per color) score their face value.
+
+**UNO and Contre-UNO:** with two cards left you have to press **UNO!** *before* the play that leaves
+you with one (the button lights up; the `U` key presses it, `D` draws, `C` calls Contre-UNO). Forget,
+and nothing happens right away, but you're exposed: anyone can hit **Contre-UNO!** (on your seat, or
+the red button above the deck) and you draw 2. It stays open until someone catches you or you hold
+more than one card again; saying UNO afterwards doesn't save you. This also counts for jump-ins and
+doubles that take you down to one card. Bots catch people too, and now and then forget UNO themselves.
 
 **Scoring:** the first player out wins the round and scores the points left in everyone else's
 hands (numbers face value, Skip/Reverse/+2 = 20, Wilds = 50). A final +2 or +4 still makes the next
@@ -73,7 +89,7 @@ player draw first. **Next round** keeps the scores; the totals show at every sea
 - 25 s per turn (a white ring runs around your avatar). Miss it and you're marked **AFK**: the computer
   plays your turns quickly until you play again or press **I'm back**.
 - The host can **add bots** in the lobby, and press 🤖 on any player's avatar during a game to hand
-  their seat to a bot. Bots stack, jump in, and always say UNO.
+  their seat to a bot. Bots stack, jump in, call Contre-UNO, and sometimes forget to say UNO.
 - If a player drops, the game pauses until they come back (refresh, or join again with the same PIN
   and name). The host can **Continue without them** (a bot plays for them until they return).
 - If the host drops, everyone waits while their client keeps reconnecting. The game is saved in the
@@ -87,6 +103,20 @@ the table glows in the color to play, and dots flow around it in the direction o
 from hand to pile and from the deck to whoever draws. Chat opens from the top bar; messages also pop
 up as speech bubbles at the sender's seat. Sounds: card slaps, shuffles, a fanfare for UNO, a buzzer
 for a forgotten UNO, sad trombones for +2/+4 (speaker button mutes).
+
+## Sandbox: `/sandbox`
+
+Open `/sandbox` on the site to try everything alone, with the same rules engine and table as the real
+game (nothing goes over the network):
+
+- 2 to 8 players, the house rules, and **Playing as**: take any seat (the table turns around you).
+- **Others play by themselves**, or switch it off and play each seat in turn.
+- **Try a situation**: Say UNO, Catch someone, You forgot UNO, Jump in, Doubles, +2 combo, Specials,
+  Reverse, Last card (round end), Reshuffle, Big hand.
+- **Give a card**: any card to any player or onto the pile, and set the color to play.
+- **Players and hands**: everyone's cards (tap one to put it back), make it someone's turn, set them
+  here / afk / bot / away, empty a hand.
+- **Effects** and **Sounds**: fire each animation and sound on its own.
 
 ## Develop / test
 

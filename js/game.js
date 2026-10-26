@@ -88,9 +88,10 @@ export function createLobby(rules = RULES) {
     by: -1,           // seat that played the top card (-1: flipped from the deck)
     uno: {},          // seat -> said UNO and is down to one card
     armed: {},        // seat -> pressed UNO, ready for the play that leaves one card (secret)
+    exposed: {},      // seat -> down to one card without having said UNO: anyone can catch them
     events: [],       // recent events for animations, sounds and the chat log
     eventId: 0,
-    stats: {},        // seat -> {played, drawn, jumps, forgot}
+    stats: {},        // seat -> {played, drawn, jumps, caught}
     winner: -1,
     ranks: [],        // seats: winner first, then fewest points left in hand
     scores: {},       // seat -> points left in hand at the end of the round
@@ -124,7 +125,7 @@ export function startGame(s, rng = Math.random) {
   s.stats = {};
   for (const p of s.players) {
     s.hands[p.seat] = [];
-    s.stats[p.seat] = { played: 0, drawn: 0, jumps: 0, forgot: 0 };
+    s.stats[p.seat] = { played: 0, drawn: 0, jumps: 0, caught: 0 };
   }
   for (let r = 0; r < HAND_SIZE; r++) for (const p of s.players) s.hands[p.seat].push(s.deck.pop());
   // The game opens on a number card: anything else goes back into the pile.
@@ -141,6 +142,7 @@ export function startGame(s, rng = Math.random) {
   s.drawn = null;
   s.uno = {};
   s.armed = {};
+  s.exposed = {};
   s.events = [];
   s.winner = -1;
   s.ranks = [];
@@ -240,16 +242,15 @@ export function play(s, seat, ids, color = null, rng = Math.random) {
   s.note = jump ? `${name} jumped in with ${what}!` : `${name} played ${what}`;
   event(s, { kind: 'play', seat, cards: played, jump });
 
-  // UNO has to be said before the play that leaves one card. Forgot? Draw 2.
+  // UNO has to be said before the play that leaves one card. Forgot? You're
+  // exposed: anyone can catch you (Contre-UNO) and you draw 2, until you
+  // have more than one card again.
   const left = s.hands[seat].length;
   if (left === 1 && s.armed[seat]) {
     s.uno[seat] = true;
     event(s, { kind: 'uno', seat });
   } else if (left === 1) {
-    event(s, { kind: 'forgot', seat });
-    give(s, seat, 2, rng);
-    s.stats[seat].forgot += 1;
-    s.note += `, forgot to say UNO: +2`;
+    s.exposed[seat] = true;
   }
   s.armed[seat] = false;
   applyEffect(s, seat, last, rng);
@@ -320,10 +321,25 @@ export function pass(s, seat) {
 
 // Say UNO, before the play that leaves you with one card. Returns false
 // when it changes nothing (too many cards to matter, or already said).
+// Saying it after the fact doesn't count.
 export function callUno(s, seat) {
   if (s.phase !== 'playing' || !s.hands[seat] || s.hands[seat].length < 2 || s.armed[seat]) return false;
   s.armed[seat] = true;
   return true;
+}
+
+// Contre-UNO: catch someone who went down to one card without saying UNO.
+// They draw 2. Open until they're caught or hold more than one card again.
+export function catchUno(s, catcher, target, rng = Math.random) {
+  if (s.phase !== 'playing' || !s.exposed[target] || catcher === target || !s.hands[catcher]) {
+    throw new Error('Nobody to catch there');
+  }
+  delete s.exposed[target];
+  event(s, { kind: 'catch', seat: catcher, target });
+  give(s, target, 2, rng);
+  s.stats[target].caught += 1;
+  s.note = `Contre-UNO! ${nameOf(s, catcher)} caught ${nameOf(s, target)}: +2`;
+  s.seq += 1;
 }
 
 function give(s, seat, n, rng) {
@@ -335,7 +351,10 @@ function give(s, seat, n, rng) {
   }
   s.hands[seat].push(...got);
   s.stats[seat].drawn += got.length;
-  if (s.hands[seat].length > 1) s.uno[seat] = false;
+  if (s.hands[seat].length > 1) {
+    s.uno[seat] = false;
+    delete s.exposed[seat];
+  }
   if (got.length) event(s, { kind: 'draw', seat, n: got.length, cards: got.map((c) => ({ ...c })) });
   return got;
 }
@@ -361,6 +380,7 @@ function finishRound(s, seat, rng) {
   s.winner = seat;
   s.turn = -1;
   s.drawn = null;
+  s.exposed = {};
   s.scores = {};
   for (const p of s.players) s.scores[p.seat] = s.hands[p.seat].reduce((sum, c) => sum + points(c), 0);
   const others = s.players.map((p) => p.seat).filter((x) => x !== seat);
@@ -393,6 +413,7 @@ export function viewFor(s, seat) {
     by: s.by,
     drawn: seat >= 0 && seat === s.turn ? s.drawn : null,
     uno: { ...s.uno },
+    exposed: { ...s.exposed },
     armed: !!s.armed[seat],
     discard: s.discard.slice(-6).map((c) => ({ ...c })),
     deckCount: s.deck.length,

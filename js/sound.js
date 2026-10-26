@@ -8,7 +8,8 @@ let muted = false;
 try { muted = localStorage.getItem('uno.muted') === '1'; } catch { /* storage blocked */ }
 
 function audio() {
-  if (muted) return null;
+  // Browsers only allow sound after the first click or key press.
+  if (muted || (navigator.userActivation && !navigator.userActivation.hasBeenActive)) return null;
   if (!ctx) {
     const AC = window.AudioContext || window.webkitAudioContext;
     if (!AC) return null;
@@ -150,11 +151,17 @@ export const sound = {
     for (const n of [65, 69, 72, 77]) tone(NOTE(n), 0.16, 0.55, { type: 'sawtooth', gain: 0.07, cutoff: 4500, vib: 3 });
     [96, 100, 103, 108].forEach((n, i) => bell(NOTE(n), 0.2 + i * 0.05, 0.4, 0.05));
   },
-  // Forgot to say UNO: game-show buzzer.
-  forgot() {
-    for (const at of [0, 0.22]) {
-      tone(110, at, 0.18, { type: 'square', gain: 0.12, cutoff: 1500, verb: false });
-      tone(116, at, 0.18, { type: 'sawtooth', gain: 0.08, cutoff: 1500, verb: false });
+  // Contre-UNO! A referee whistle, then the buzzer for whoever got caught.
+  caught() {
+    tone(2600, 0, 0.12, { type: 'sine', gain: 0.1, vib: 60, verb: false });
+    tone(2600, 0.16, 0.3, { type: 'sine', gain: 0.1, vib: 80, verb: false });
+    sound.forgot(0.42);
+  },
+  // Game-show buzzer.
+  forgot(at = 0) {
+    for (const t of [at, at + 0.22]) {
+      tone(110, t, 0.18, { type: 'square', gain: 0.12, cutoff: 1500, verb: false });
+      tone(116, t, 0.18, { type: 'sawtooth', gain: 0.08, cutoff: 1500, verb: false });
     }
   },
   // Skip: a cartoon "bonk".

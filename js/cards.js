@@ -25,16 +25,44 @@ function icon(kind) {
   if (kind === 'skip') {
     add('circle', { cx: 12, cy: 12, r: 8.2, ...line, 'stroke-width': 3.2 });
     add('path', { d: 'M6.4 17.6 17.6 6.4', ...line, 'stroke-width': 3.2 });
-  } else if (kind === 'rev') {
-    add('path', { d: 'M4 9h12.5M13 5l4 4-4 4', ...line, 'stroke-width': 2.8 });
-    add('path', { d: 'M20 15H7.5M11 11l-4 4 4 4', ...line, 'stroke-width': 2.8 });
+  }
+  return s;
+}
+
+// Reverse: two white arrows with thick black outlines, going opposite ways,
+// their tails hooking into each other in the middle (the classic look).
+function reverseIcon() {
+  const s = document.createElementNS(NS, 'svg');
+  s.setAttribute('viewBox', '0 0 100 100');
+  s.setAttribute('class', 'ico rev');
+  s.setAttribute('aria-hidden', 'true');
+  const tail = [47, 61], c1 = [40, 54], c2 = [39, 48], bend = [45, 42], end = [61, 26];
+  const len = Math.hypot(end[0] - bend[0], end[1] - bend[1]);
+  const ux = (end[0] - bend[0]) / len, uy = (end[1] - bend[1]) / len;
+  const tip = [end[0] + ux * 17, end[1] + uy * 17];
+  const wing = (k) => [end[0] - k * uy * 16, end[1] + k * ux * 16];
+  const shaft = `M${tail} C${c1} ${c2} ${bend} L${end[0] + ux} ${end[1] + uy}`;
+  const head = `${tip} ${wing(1)} ${wing(-1)}`;
+  for (const turn of [0, 180]) {
+    const g = document.createElementNS(NS, 'g');
+    g.setAttribute('transform', `rotate(${turn} 50 50)`);
+    // Black outline first, then the white arrow on top of it.
+    for (const [color, w, o] of [['#111', 13 + 9, 9], ['#fff', 13, 1]]) {
+      const p = document.createElementNS(NS, 'path');
+      for (const [k, v] of Object.entries({ d: shaft, fill: 'none', stroke: color, 'stroke-width': w, 'stroke-linecap': 'round' })) p.setAttribute(k, v);
+      const h = document.createElementNS(NS, 'polygon');
+      for (const [k, v] of Object.entries({ points: head, fill: color, stroke: color, 'stroke-width': o, 'stroke-linejoin': 'round' })) h.setAttribute(k, v);
+      g.append(p, h);
+    }
+    s.append(g);
   }
   return s;
 }
 
 // What goes in the middle and the corners for a value.
 function label(v, parent, corner) {
-  if (v === 'skip' || v === 'rev') parent.append(icon(v));
+  if (v === 'rev') parent.append(reverseIcon());
+  else if (v === 'skip') parent.append(icon(v));
   else if (v === 'wild') {
     if (corner) el('span', 'mini-wild', parent);
   } else parent.textContent = v === 'd2' ? '+2' : v === 'd4' ? '+4' : v;

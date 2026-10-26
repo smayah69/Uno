@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0e0d14">
+  <meta name="robots" content="noindex">
+  <title>Uno sandbox</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="preload" href="fonts/fredoka-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <div class="blobs" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+  <main id="app">
+    <section id="screen-game" class="screen active" aria-label="Sandbox">
+      <header class="topbar">
+        <a class="logo tiny" href="./" title="Back to the game"><span>UNO</span></a>
+        <span class="chip sandbox-chip">Sandbox</span>
+        <span id="rule-chips" class="rule-chips"></span>
+        <span class="spacer"></span>
+        <button type="button" id="btn-panel" class="btn small panel-toggle" aria-controls="panel" aria-expanded="false">Controls</button>
+        <button type="button" id="btn-sound" class="icon-btn" title="Sound on/off" aria-label="Toggle sound">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9h4l5-4v14l-5-4H4z" fill="currentColor"/><path class="waves" d="M16 8.5a5 5 0 0 1 0 7M18.5 6a8.5 8.5 0 0 1 0 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path class="mute" d="M16 9l5 6m0-6l-5 6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        </button>
+        <a href="./" class="btn small ghost sb-real">Play for real</a>
+      </header>
+
+      <div class="sb-body">
+        <aside id="panel" class="sb-panel" aria-label="Sandbox controls">
+          <section class="sb-sec">
+            <h3>Table</h3>
+            <div class="sb-row"><span class="sb-label">Players</span><div id="sb-count" class="seg"></div></div>
+            <div class="sb-row">
+              <button type="button" id="sb-new" class="btn small primary">New game</button>
+              <label class="sb-switch"><input type="checkbox" id="sb-auto" checked> Others play by themselves</label>
+            </div>
+            <div class="sb-row"><span class="sb-label">Playing as</span><div id="sb-as" class="seg seats-seg"></div></div>
+          </section>
+
+          <section class="sb-sec">
+            <h3>House rules</h3>
+            <label class="sb-switch"><input type="checkbox" data-rule="jumpIn"> Saute mouton: jump in</label>
+            <label class="sb-switch"><input type="checkbox" data-rule="multi"> Saute mouton: doubles</label>
+            <label class="sb-switch"><input type="checkbox" data-rule="stack"> +2 combo</label>
+          </section>
+
+          <section class="sb-sec">
+            <h3>Try a situation</h3>
+            <div id="sb-setups" class="sb-grid"></div>
+            <p id="sb-hint" class="sb-hint" hidden></p>
+          </section>
+
+          <section class="sb-sec">
+            <h3>Give a card</h3>
+            <div class="sb-row"><span class="sb-label">To</span><div id="sb-target" class="seg"></div></div>
+            <div id="sb-palette" class="palette"></div>
+            <div class="sb-row"><span class="sb-label">Color to play</span><div id="sb-color" class="seg"></div></div>
+          </section>
+
+          <section class="sb-sec">
+            <h3>Players and hands</h3>
+            <p class="sb-note">Tap a card to put it back in the deck.</p>
+            <ol id="sb-hands" class="sb-hands"></ol>
+          </section>
+
+          <section class="sb-sec">
+            <h3>Effects</h3>
+            <p class="sb-note">On the player picked under “Give a card”.</p>
+            <div id="sb-effects" class="sb-grid"></div>
+          </section>
+
+          <section class="sb-sec">
+            <h3>Sounds</h3>
+            <div id="sb-sounds" class="sb-grid"></div>
+          </section>
+        </aside>
+
+        <div class="play">
+          <div id="table" class="table">
+            <div class="felt" aria-hidden="true"></div>
+            <svg id="dir-ring" class="dir-ring" viewBox="0 0 200 120" aria-hidden="true" preserveAspectRatio="none">
+              <ellipse class="dir-flow" cx="100" cy="60" rx="96" ry="56"/>
+            </svg>
+            <div class="table-center">
+              <div class="pile-wrap">
+                <div id="pile" class="pile" aria-label="Discard pile"></div>
+                <div id="pending" class="pending" aria-live="polite" hidden></div>
+              </div>
+            </div>
+            <div class="color-tag" aria-live="polite"><span class="color-dot"></span><span id="color-name"></span><span class="dir-arrow" aria-hidden="true"></span></div>
+            <div id="seats" class="seats"></div>
+            <div class="status">
+              <p id="turn-text" class="turn-text"></p>
+              <p id="note-text" class="note-text" aria-live="polite"></p>
+            </div>
+          </div>
+
+          <div id="me-bar" class="me-bar">
+            <div class="hand-actions">
+              <button type="button" id="btn-catch" class="btn catch" hidden>Contre-UNO!</button>
+              <button type="button" id="btn-pass" class="btn" hidden>Keep it</button>
+              <button type="button" id="btn-clear" class="btn ghost small" hidden>Cancel</button>
+              <button type="button" id="btn-play" class="btn primary" hidden>Play</button>
+            </div>
+            <div class="hand-row">
+              <div id="hand-wrap" class="hand-wrap">
+                <div id="hand" class="hand" role="group" aria-label="Your cards"></div>
+              </div>
+              <button type="button" id="deck" class="deck" aria-label="Draw a card" disabled>
+                <span class="deck-stack" aria-hidden="true"></span>
+                <span id="deck-tag" class="deck-tag" aria-hidden="true"></span>
+                <span id="deck-count" class="deck-count" title="Cards left in the draw pile"></span>
+              </button>
+              <button type="button" id="btn-uno" class="uno-btn" disabled aria-label="Say UNO"><span>UNO!</span></button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <div id="overlay" class="overlay" hidden>
+      <div class="panel overlay-card">
+        <h2 id="overlay-title"></h2>
+        <p id="overlay-sub" class="muted small"></p>
+        <div id="overlay-board" class="overlay-board"></div>
+        <div class="row center">
+          <button type="button" id="btn-again" class="btn primary">New game</button>
+          <button type="button" id="btn-close" class="btn ghost">Back to the table</button>
+        </div>
+      </div>
+    </div>
+    <div id="color-picker" class="overlay" hidden>
+      <div class="panel overlay-card picker-card" role="dialog" aria-modal="true" aria-labelledby="picker-title">
+        <h2 id="picker-title">Pick a color</h2>
+        <div class="picker">
+          <button type="button" class="pick c-r" data-color="r">Red</button>
+          <button type="button" class="pick c-y" data-color="y">Yellow</button>
+          <button type="button" class="pick c-g" data-color="g">Green</button>
+          <button type="button" class="pick c-b" data-color="b">Blue</button>
+        </div>
+        <button type="button" id="btn-pick-cancel" class="btn ghost small">Cancel</button>
+      </div>
+    </div>
+    <div id="fx" class="fx" aria-hidden="true"></div>
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  </main>
+
+  <script type="module" src="js/sandbox.js"></script>
+</body>
+</html>
