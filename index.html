@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0e0d14">
+  <meta name="description" content="Uno online for 2 to 8 players, with saute mouton and +2 combo house rules. Host a game, share the 6-digit PIN, play.">
+  <title>Uno</title>
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Uno">
+  <meta property="og:title" content="Uno">
+  <meta property="og:description" content="Uno online for 2 to 8 players. Host a game, share the 6-digit PIN, play.">
+  <meta name="twitter:card" content="summary">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="preload" href="fonts/fredoka-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <div class="blobs" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+  <main id="app">
+    <!-- 1. Name + host/join -->
+    <section id="screen-home" class="screen active" aria-labelledby="title">
+      <div class="home">
+        <div class="hero" aria-hidden="true">
+          <span class="hero-card c-r"></span><span class="hero-card c-y"></span><span class="hero-card c-g"></span><span class="hero-card c-b"></span>
+        </div>
+        <h1 id="title" class="logo"><span>UNO</span></h1>
+        <p class="tagline">Play with 2 to 8 friends. No sign-up, just a PIN.</p>
+
+        <form id="home-form" class="panel home-panel" autocomplete="off" novalidate>
+          <label for="name-input">Your name</label>
+          <input id="name-input" name="name" maxlength="16" placeholder="What do we call you?" required autofocus>
+
+          <div class="actions">
+            <button type="button" id="btn-host" class="btn primary big" disabled>Host a game</button>
+            <button type="button" id="btn-join-toggle" class="btn big" disabled>Join with PIN</button>
+          </div>
+
+          <div id="join-box" class="join-box" hidden>
+            <label for="pin-input">Game PIN</label>
+            <div class="row">
+              <input id="pin-input" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" placeholder="••••••">
+              <button type="submit" id="btn-join" class="btn primary" disabled>Join</button>
+            </div>
+          </div>
+          <div id="resume-box" class="resume-box" hidden>
+            <p>You were hosting game <strong id="resume-pin"></strong>.</p>
+            <div class="row">
+              <button type="button" id="btn-resume" class="btn primary">Resume game</button>
+              <button type="button" id="btn-discard" class="btn ghost small">Discard</button>
+            </div>
+          </div>
+          <p id="home-error" class="error" role="alert"></p>
+        </form>
+        <p id="local-badge" class="muted small" hidden>Local test mode (same-browser tabs only)</p>
+      </div>
+    </section>
+
+    <!-- 2. Lobby -->
+    <section id="screen-lobby" class="screen" aria-label="Lobby">
+      <div class="lobby">
+        <header class="lobby-head">
+          <span class="logo small"><span>UNO</span></span>
+          <button type="button" id="btn-leave-lobby" class="btn ghost small">Leave</button>
+        </header>
+
+        <div class="panel pin-panel">
+          <p class="eyebrow">Game PIN</p>
+          <div id="pin-display" class="pin" aria-live="polite"></div>
+          <div class="row center">
+            <button type="button" id="btn-copy-pin" class="btn small">Copy PIN</button>
+            <button type="button" id="btn-copy-link" class="btn small">Copy invite link</button>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h2>Players <span id="player-count" class="count"></span></h2>
+          <ul id="lobby-players" class="lobby-players"></ul>
+          <button type="button" id="btn-add-bot" class="btn small ghost add-bot" hidden>+ Add a bot</button>
+        </div>
+
+        <div class="panel">
+          <h2>House rules</h2>
+          <p id="rules-text" class="muted small"></p>
+          <div id="rules" class="rules">
+            <label class="rule">
+              <span class="rule-icon" aria-hidden="true">≡</span>
+              <span class="rule-text"><b>Saute mouton: jump in</b>
+                <small>Someone throws a card and you hold the exact same one (same number, same color)? Throw yours right away, even when it's not your turn. Play carries on from you.</small></span>
+              <input type="checkbox" role="switch" data-rule="jumpIn">
+            </label>
+            <label class="rule">
+              <span class="rule-icon" aria-hidden="true">×2</span>
+              <span class="rule-text"><b>Saute mouton: doubles</b>
+                <small>On your turn, throw two (or more) cards with the same number together, like a red 7 and a blue 7. The last one sets the color.</small></span>
+              <input type="checkbox" role="switch" data-rule="multi">
+            </label>
+            <label class="rule">
+              <span class="rule-icon" aria-hidden="true">+2</span>
+              <span class="rule-text"><b>+2 combo</b>
+                <small>Hit with a +2? Answer with your own +2 and the next player takes 4, then 6… Whoever can't stack draws the lot.</small></span>
+              <input type="checkbox" role="switch" data-rule="stack">
+            </label>
+          </div>
+        </div>
+
+        <footer class="lobby-foot">
+          <p id="lobby-status" class="muted"></p>
+          <button type="button" id="btn-start" class="btn primary big" hidden disabled>Start game</button>
+        </footer>
+      </div>
+    </section>
+
+    <!-- 3. Game -->
+    <section id="screen-game" class="screen" aria-label="Game">
+      <header class="topbar">
+        <span class="logo tiny"><span>UNO</span></span>
+        <span id="round-label" class="chip"></span>
+        <span class="chip" title="Game time (stops while paused)">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="13" r="8" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="M12 9v4l2.5 2.5M9.5 2.5h5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
+          <span id="game-clock" class="game-clock">0:00</span>
+        </span>
+        <span id="rule-chips" class="rule-chips"></span>
+        <span class="spacer"></span>
+        <button type="button" id="btn-chat" class="icon-btn" title="Chat" aria-label="Open chat" aria-controls="chat" aria-expanded="false">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v11H9l-5 4z" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"/></svg>
+          <span id="chat-unread" class="dot-badge" hidden></span>
+        </button>
+        <button type="button" id="btn-sound" class="icon-btn" title="Sound on/off" aria-label="Toggle sound">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9h4l5-4v14l-5-4H4z" fill="currentColor"/><path class="waves" d="M16 8.5a5 5 0 0 1 0 7M18.5 6a8.5 8.5 0 0 1 0 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path class="mute" d="M16 9l5 6m0-6l-5 6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        </button>
+        <button type="button" id="btn-leave-game" class="icon-btn" title="Leave game" aria-label="Leave game">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h5v16h-5M10 8l-4 4 4 4M6 12h10" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+      </header>
+
+      <div class="play">
+        <div id="pause-banner" class="banner" role="status" hidden>
+          <p id="pause-text"></p>
+          <button type="button" id="btn-invite" class="btn small" hidden>Copy invite link</button>
+          <button type="button" id="btn-continue" class="btn small" hidden>Continue without them</button>
+        </div>
+        <div id="afk-banner" class="banner afk" role="status" hidden>
+          <p>You were away too long, so the computer is playing your turns.</p>
+          <button type="button" id="btn-back" class="btn small">I'm back</button>
+        </div>
+
+        <div id="table" class="table">
+          <div class="felt" aria-hidden="true"></div>
+          <svg id="dir-ring" class="dir-ring" viewBox="0 0 200 120" aria-hidden="true" preserveAspectRatio="none">
+            <ellipse class="dir-flow" cx="100" cy="60" rx="96" ry="56"/>
+          </svg>
+          <div class="table-center">
+            <div class="pile-wrap">
+              <div id="pile" class="pile" aria-label="Discard pile"></div>
+              <div id="pending" class="pending" aria-live="polite" hidden></div>
+            </div>
+          </div>
+          <div class="color-tag" aria-live="polite"><span class="color-dot"></span><span id="color-name"></span><span class="dir-arrow" aria-hidden="true"></span></div>
+          <div id="seats" class="seats"></div>
+        </div>
+
+        <div class="status">
+          <p id="turn-text" class="turn-text"></p>
+          <p id="note-text" class="note-text" aria-live="polite"></p>
+        </div>
+
+        <div id="me-bar" class="me-bar">
+          <div class="hand-actions">
+            <button type="button" id="btn-pass" class="btn" hidden>Keep it</button>
+            <button type="button" id="btn-clear" class="btn ghost small" hidden>Cancel</button>
+            <button type="button" id="btn-play" class="btn primary" hidden>Play</button>
+          </div>
+          <div class="hand-row">
+            <div id="hand-wrap" class="hand-wrap">
+              <div id="hand" class="hand" role="group" aria-label="Your cards"></div>
+            </div>
+            <button type="button" id="deck" class="deck" aria-label="Draw a card" disabled>
+              <span class="deck-stack" aria-hidden="true"></span>
+              <span id="deck-tag" class="deck-tag" aria-hidden="true"></span>
+              <span id="deck-count" class="deck-count" title="Cards left in the draw pile"></span>
+            </button>
+            <button type="button" id="btn-uno" class="uno-btn" disabled aria-label="Say UNO"><span>UNO!</span></button>
+          </div>
+        </div>
+      </div>
+
+      <aside id="chat" class="chat" aria-label="Chat">
+        <div class="chat-head">
+          <span class="chat-title">Chat</span>
+          <span id="chat-count" class="chip"></span>
+          <button type="button" id="btn-chat-close" class="icon-btn" aria-label="Close chat">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg>
+          </button>
+        </div>
+        <ol id="chat-log" class="chat-log" aria-live="polite"></ol>
+        <form id="chat-form" class="chat-form" autocomplete="off">
+          <input id="chat-input" maxlength="200" placeholder="Say something…" aria-label="Chat message">
+          <button type="submit" class="btn primary small">Send</button>
+        </form>
+      </aside>
+    </section>
+
+    <!-- Overlays -->
+    <div id="overlay" class="overlay" hidden>
+      <div class="panel overlay-card">
+        <h2 id="overlay-title"></h2>
+        <p id="overlay-sub" class="muted small"></p>
+        <div id="overlay-board" class="overlay-board"></div>
+        <p id="overlay-text" class="muted"></p>
+        <div class="row center">
+          <button type="button" id="btn-again" class="btn primary" hidden>Next round</button>
+          <button type="button" id="btn-copy-results" class="btn" hidden>Copy results</button>
+          <button type="button" id="btn-home" class="btn ghost">Main menu</button>
+        </div>
+      </div>
+    </div>
+    <div id="color-picker" class="overlay" hidden>
+      <div class="panel overlay-card picker-card" role="dialog" aria-modal="true" aria-labelledby="picker-title">
+        <h2 id="picker-title">Pick a color</h2>
+        <div class="picker">
+          <button type="button" class="pick c-r" data-color="r">Red</button>
+          <button type="button" class="pick c-y" data-color="y">Yellow</button>
+          <button type="button" class="pick c-g" data-color="g">Green</button>
+          <button type="button" class="pick c-b" data-color="b">Blue</button>
+        </div>
+        <button type="button" id="btn-pick-cancel" class="btn ghost small">Cancel</button>
+      </div>
+    </div>
+    <div id="fx" class="fx" aria-hidden="true"></div>
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  </main>
+
+  <script src="vendor/peerjs.min.js"></script>
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
