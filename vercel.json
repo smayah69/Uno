@@ -2,7 +2,7 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "cleanUrls": true,
   "rewrites": [
-    { "source": "/(itc1|itc2)", "destination": "/index.html" }
+    { "source": "/(itc1|itc2)", "destination": "/" }
   ],
   "headers": [
     {
