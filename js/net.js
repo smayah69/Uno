@@ -2,12 +2,14 @@
 // everyone else connects to it peer-to-peer.
 //
 // - PeerNet: WebRTC via PeerJS (public broker is only used for signaling).
-//   The host registers the peer id `uno-p2p-v1-<PIN>`.
+//   The host registers the peer id `uno-p2p-v1-<PIN>` (or `uno-p2p-v1-itc1`
+//   for the private rooms, see room.js).
 // - LocalNet: BroadcastChannel between tabs of the same browser, enabled with
 //   ?local=1. Same message flow, no internet needed (handy for testing).
 //
 // Clients call connect() again after a drop to reconnect; a host that comes
-// back calls start(pin) to reclaim its old PIN.
+// back calls start(pin) to reclaim its old PIN. A missing host rejects with
+// err.code = 'no-host'.
 
 const PREFIX = 'uno-p2p-v1-';
 const CONNECT_TIMEOUT = 15000;
@@ -69,9 +71,10 @@ class PeerHost {
           peer.destroy();
           if (this.closed) return;
           if (err.type === 'unavailable-id' && wantPin && tries++ < RECLAIM_TRIES) {
-            this.onStatus(`Reclaiming PIN ${wantPin}… (${tries})`);
+            this.onStatus(`Reclaiming ${/^\d+$/.test(wantPin) ? 'PIN ' : 'room '}${wantPin.toUpperCase()}… (${tries})`);
             setTimeout(attempt, RECLAIM_DELAY);
           } else if (err.type === 'unavailable-id' && !wantPin && tries++ < 5) attempt();
+          else if (err.type === 'unavailable-id' && wantPin && !/^\d+$/.test(wantPin)) reject(new Error(`${wantPin.toUpperCase()} is already open somewhere else (another tab or device?). Try again in a minute.`));
           else reject(new Error(friendlyError(err)));
         });
       };
@@ -123,12 +126,12 @@ class PeerClient {
       this.peer = peer;
       let open = false;
       let settled = false;
-      const fail = (msg) => {
+      const fail = (msg, code) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
         peer.destroy();
-        reject(new Error(msg));
+        reject(Object.assign(new Error(msg), { code }));
       };
       const lost = () => {
         if (!open || this.peer !== peer) return;
@@ -140,7 +143,8 @@ class PeerClient {
         : 'Could not reach the matchmaking server (0.peerjs.com). Check your internet connection, or disable an ad blocker / VPN.'), CONNECT_TIMEOUT);
       peer.on('error', (err) => {
         if (settled) { if (err.type === 'peer-unavailable') lost(); return; }
-        fail(err.type === 'peer-unavailable' ? 'No game found with that PIN. Check it, and that the host still has the game open.' : friendlyError(err));
+        if (err.type === 'peer-unavailable') fail('No game found with that PIN. Check it, and that the host still has the game open.', 'no-host');
+        else fail(friendlyError(err));
       });
       peer.on('open', () => {
         const conn = peer.connect(PREFIX + pin, { reliable: true, serialization: 'json' });
@@ -251,7 +255,7 @@ class LocalClient {
       const ch = new BroadcastChannel(PREFIX + pin);
       this.ch = ch;
       let open = false;
-      const timer = setTimeout(() => { this.close(); reject(new Error('No game found with that PIN.')); }, 2000);
+      const timer = setTimeout(() => { this.close(); reject(Object.assign(new Error('No game found with that PIN.'), { code: 'no-host' })); }, 2000);
       ch.onmessage = ({ data }) => {
         if (data.to !== id && data.to !== '*') return;
         if (data.kind === 'accept') { clearTimeout(timer); open = true; resolve(); }

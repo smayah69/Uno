@@ -8,13 +8,38 @@ Online multiplayer Uno in the browser, for **2 to 8 players**.
 
 ## Deploy on Vercel
 
-It's a static site: no build step, no server code.
+It's a static site with no build step. The only server code is `api/itc.js`, for the private rooms.
 
 1. On Vercel: **Add New… → Project → Import** this repo.
 2. Framework preset: **Other**. Leave Build Command and Output Directory empty.
 3. **Deploy**.
 
-`vercel.json` adds security headers (CSP, nosniff, no-referrer, frame-ancestors none).
+`vercel.json` adds security headers (CSP, nosniff, no-referrer, frame-ancestors none) and the
+`/itc1`, `/itc2` routes.
+
+For the private rooms, set **`ITC_PASSWORD`** in the Vercel project (**Settings → Environment
+Variables**), then redeploy. Without it the rooms refuse to open; the rest of the site works as before.
+
+## Private rooms: `/itc1` and `/itc2`
+
+Two fixed game addresses, no PIN or invite link to share:
+
+- **Players** open `/itc1`, type their name and tap **Join ITC1**. If the host isn't there yet they
+  wait, and get in by themselves as soon as the room opens. A refresh puts them back in.
+- **Only the owner can open a room:** tap **I'm the host** and enter the password (`ITC_PASSWORD`). The
+  browser then remembers the login for 30 days, and the button becomes **Open ITC1 (host)**.
+- Everything else (house rules, bots, rounds, pause/resume) works like a normal game. If the host
+  refreshes in the lobby, waiting players reconnect to the reopened room by themselves.
+
+The room's peer id (`uno-p2p-v1-itc1`) is public, so anyone could register it on the PeerJS broker
+while the room is closed. That's why players don't just trust whoever answers: each player sends a
+random challenge, the host gets it signed by `api/itc.js` (which only signs for a valid owner login), and the
+player has the server check the signature before showing anything from that host. An impostor can
+block the room while it's closed, but can't get players into their game.
+
+`api/itc.js` is stateless: logins and signatures are HMACs keyed from the password, so **changing
+`ITC_PASSWORD` logs out every browser**. Wrong passwords are answered after a 1 s delay, but there is
+no real rate limit (no storage), so use a long password.
 
 ## How it works
 
@@ -38,6 +63,8 @@ js/net.js      transports: PeerJS (prod) and BroadcastChannel (?local=1, testing
 js/sound.js    synthesized sound effects (Web Audio)
 js/text.js     name and chat sanitizing
 js/main.js     host / client controllers, home, lobby, chat
+js/room.js     private rooms /itc1, /itc2 (client side)
+api/itc.js     private rooms: owner password and host checks (Vercel function)
 js/sandbox.js  the /sandbox test page
 fonts/         Fredoka (SIL Open Font License)
 ```
@@ -127,6 +154,8 @@ node --test tests/*.test.mjs         # rules engine tests, including bot games u
 
 Add `?local=1` to the URL to play across tabs of the same browser without internet
 (BroadcastChannel). Open one tab to host and others to join. `&turnms=5000` shortens the turn timer.
+A static server doesn't route `/itc1` or run `api/itc.js`; use `vercel dev` for that. With `?local=1`
+(`/itc1?local=1`) any room password works, since only your own tabs are involved.
 
 ## Known limitations / threat model
 

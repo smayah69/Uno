@@ -31,7 +31,22 @@
           <label for="name-input">Your name</label>
           <input id="name-input" name="name" maxlength="16" placeholder="What do we call you?" required autofocus>
 
-          <div class="actions">
+          <!-- Private room (/itc1, /itc2): join, or open it as the host. First submit
+               button in the form, so Enter submits even with the PIN box hidden. -->
+          <div id="room-box" hidden>
+            <div class="actions">
+              <button type="submit" id="btn-room-join" class="btn primary big" disabled>Join</button>
+              <button type="button" id="btn-room-host" class="btn big" disabled>I'm the host</button>
+            </div>
+            <div id="room-login" class="join-box" hidden>
+              <label for="room-password">Host password</label>
+              <div class="row">
+                <input id="room-password" type="password" autocomplete="current-password" placeholder="Password">
+                <button type="button" id="btn-room-open" class="btn primary" disabled>Open room</button>
+              </div>
+            </div>
+          </div>
+          <div id="home-actions" class="actions">
             <button type="button" id="btn-host" class="btn primary big" disabled>Host a game</button>
             <button type="button" id="btn-join-toggle" class="btn big" disabled>Join with PIN</button>
           </div>
@@ -51,6 +66,7 @@
             </div>
           </div>
           <p id="home-error" class="error" role="alert"></p>
+          <button type="button" id="btn-room-cancel" class="btn ghost small" hidden>Stop waiting</button>
         </form>
         <p id="local-badge" class="muted small" hidden>Local test mode (same-browser tabs only)</p>
       </div>
@@ -65,7 +81,7 @@
         </header>
 
         <div class="panel pin-panel">
-          <p class="eyebrow">Game PIN</p>
+          <p id="pin-label" class="eyebrow">Game PIN</p>
           <div id="pin-display" class="pin" aria-live="polite"></div>
           <div class="row center">
             <button type="button" id="btn-copy-pin" class="btn small">Copy PIN</button>

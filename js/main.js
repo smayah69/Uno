@@ -8,6 +8,7 @@ import { sound } from './sound.js';
 import './analytics.js';
 import { sanitizeName, sanitizeChat, MAX_NAME } from './text.js';
 import { createHostNet, createClientNet, randomId, isLocalMode } from './net.js';
+import { isRoom, codeLabel, roomFromPath, roomLink, savedTicket, forgetTicket, login, prove, check } from './room.js';
 
 // Time a connected player gets to act; miss it once and the computer plays for
 // them (AFK) until they play again. ?local=1&turnms=N shortens it for tests.
@@ -49,7 +50,8 @@ function secureRandom() {
 // viewFor(state, theirSeat).
 // ===================================================================
 class Host {
-  constructor(name, ui, saved = null) {
+  // room: open the private room /itc1 or /itc2 instead of a random PIN.
+  constructor(name, ui, saved = null, room = null) {
     this.ui = ui;
     this.net = createHostNet();
     this.connPid = new Map();   // connection id -> player id
@@ -79,19 +81,24 @@ class Host {
       this.secrets = new Map(); // client secret -> player id (never broadcast)
       this.nextPid = 1;
       this.state.players.push({ id: 'p0', name, seat: -1, connected: true, host: true });
+      this.resumePin = room;
     }
     this.logged = this.state.eventId;
+    this.room = isRoom(this.resumePin) ? this.resumePin : null;
+    this.ticket = this.room ? savedTicket() : null;
+    this.proving = new Set();   // connection ids waiting for the server to sign their challenge
   }
 
   static loadSaved() {
     try {
       const d = JSON.parse(store.get(SAVE_KEY));
-      if (d && d.v === 1 && /^\d{6}$/.test(d.pin) && d.state && d.state.phase === 'playing' && Date.now() - d.savedAt < SAVE_TTL) return d;
+      if (d && d.v === 1 && (/^\d{6}$/.test(d.pin) || isRoom(d.pin)) && d.state && d.state.phase === 'playing' && Date.now() - d.savedAt < SAVE_TTL) return d;
     } catch { /* corrupt or missing */ }
     return null;
   }
 
   async start() {
+    if (this.room && !this.ticket) throw new Error(`Only the host can open ${codeLabel(this.room)}: enter the password.`);
     this.net.onJoin = (cid) => {
       this.seen.set(cid, Date.now());
       if (this.seen.size > MAX_CONNS) { this.net.send(cid, { t: 'reject', reason: 'Too many connections' }); this.net.drop(cid); }
@@ -127,7 +134,7 @@ class Host {
     if (!this.seen.has(cid)) return;
     this.seen.set(cid, Date.now());
     if (!msg || typeof msg !== 'object' || typeof msg.t !== 'string' || msg.t === 'ping' || this.limited(cid)) return;
-    if (msg.t === 'hello') return this.hello(cid, msg);
+    if (msg.t === 'hello') return this.room ? this.provenHello(cid, msg) : this.hello(cid, msg);
     const pid = this.connPid.get(cid);
     if (!pid) return;
     if (msg.t === 'back') this.back(pid);
@@ -153,7 +160,34 @@ class Host {
     this.ui.addChat(e);
   }
 
-  hello(cid, msg) {
+  // Private room: players send a random challenge with their hello. The server
+  // signs it only for the owner's ticket, and the player checks that signature,
+  // so nobody else can pose as the host on the room's (public) peer id.
+  async provenHello(cid, msg) {
+    if (this.connPid.has(cid) || this.proving.has(cid)) return;
+    if (typeof msg.nonce !== 'string' || !/^[0-9a-f]{32}$/.test(msg.nonce)) {
+      this.net.send(cid, { t: 'reject', reason: 'Bad request' });
+      return this.net.drop(cid);
+    }
+    this.proving.add(cid);
+    let proof;
+    try {
+      proof = await prove(this.ticket, this.room, msg.nonce);
+    } catch (err) {
+      if (err.status === 401) {
+        forgetTicket();
+        this.ui.toast('Your host login expired: leave and open the room again with the password');
+      }
+      this.net.send(cid, { t: 'reject', reason: err.status === 401 ? "The host's login expired. Tell them to open the room again." : 'Could not verify the host, try again' });
+      this.net.drop(cid);
+      return;
+    } finally {
+      this.proving.delete(cid);
+    }
+    if (this.seen.has(cid)) this.hello(cid, msg, proof);
+  }
+
+  hello(cid, msg, proof) {
     if (this.connPid.has(cid)) return;
     const secret = typeof msg.secret === 'string' && /^[0-9a-f]{32}$/.test(msg.secret) ? msg.secret : null;
     const s = this.state;
@@ -191,7 +225,7 @@ class Host {
       this.toastAll(`${player.name} joined`);
     }
     this.connPid.set(cid, pid);
-    this.net.send(cid, { t: 'welcome', pid, pin: this.pin });
+    this.net.send(cid, { t: 'welcome', pid, pin: this.pin, proof });
     this.net.send(cid, { t: 'chatlog', list: this.chat });
     this.publish();
   }
@@ -536,21 +570,38 @@ class Client {
 
   async join(pin) {
     this.pin = pin;
+    this.room = isRoom(pin) ? pin : null;
     this.net.onMessage = (msg) => this.receive(msg);
     this.net.onClose = () => this.lost();
     await this.connect();
     this.heartbeat = setInterval(() => this.beat(), PING_MS);
   }
 
-  // One connection attempt: transport + hello/welcome handshake.
+  // One connection attempt: transport + hello/welcome handshake. In a private
+  // room the host must also prove it's the owner before we show anything it sends.
   async connect() {
+    this.trusted = !this.room;
+    this.held = [];
     await this.net.connect(this.pin);
     this.seen = Date.now();
-    this.net.send({ t: 'hello', name: this.name, secret: this.secret });
-    await new Promise((resolve, reject) => {
+    const nonce = this.room ? randomId(16) : undefined;
+    this.net.send({ t: 'hello', name: this.name, secret: this.secret, nonce });
+    const welcome = await new Promise((resolve, reject) => {
       this.pending = { resolve, reject };
       setTimeout(() => { if (this.pending) { this.pending = null; reject(new Error('Host did not respond')); } }, 8000);
     });
+    if (this.room) {
+      let ok = false;
+      try { ok = await check(this.room, nonce, welcome.proof); } catch { /* server unreachable: not verified */ }
+      if (!ok) {
+        this.net.close();
+        throw new Error(`Could not verify that this is the real ${codeLabel(this.room)} host. Try again in a moment.`);
+      }
+      this.trusted = true;
+      const held = this.held;
+      this.held = [];
+      for (const m of held) this.receive(m);
+    }
     this.online = true;
   }
 
@@ -563,7 +614,9 @@ class Client {
   lost() {
     if (this.closed || !this.online) return;
     this.online = false;
-    if (!this.lastState || this.lastState.phase !== 'playing') {
+    // A private room keeps its address, so a host who refreshes the lobby can be found again.
+    const waitInLobby = this.room && this.lastState && this.lastState.phase === 'lobby';
+    if (!this.lastState || (this.lastState.phase !== 'playing' && !waitInLobby)) {
       this.closed = true;
       // After a round the result screen stays up; nothing to wait for.
       if (!this.lastState || this.lastState.phase !== 'ended') this.ui.disconnected('Connection to the host was lost');
@@ -589,12 +642,21 @@ class Client {
   receive(msg) {
     this.seen = Date.now();
     if (!msg || typeof msg !== 'object') return;
+    if (!this.trusted && /^(state|toast|chat|chatlog)$/.test(msg.t)) {
+      if (this.held.length < 50) this.held.push(msg);
+      return;
+    }
     if (msg.t === 'welcome') {
       this.me = msg.pid;
       store.set('uno.pin', this.pin, sessionStorage);
-      if (this.pending) { this.pending.resolve(); this.pending = null; }
+      if (this.pending) { this.pending.resolve(msg); this.pending = null; }
     } else if (msg.t === 'reject' || msg.t === 'end') {
       const reason = String(msg.reason || 'Disconnected');
+      // Reconnecting to a room host not verified yet (maybe an impostor): only this attempt fails.
+      if (!this.trusted && this.me) {
+        if (this.pending) { this.pending.reject(new Error(reason)); this.pending = null; }
+        return;
+      }
       this.closed = true;
       if (this.pending) { this.pending.reject(Object.assign(new Error(reason), { fromHost: true })); this.pending = null; }
       if (this.me) this.ui.disconnected(reason);
@@ -664,6 +726,7 @@ class UI {
       toast: (text) => this.toast(text),
       turnTotal: TURN_MS,
     });
+    this.room = roomFromPath();
     this.bind();
     this.autoResume();
   }
@@ -674,20 +737,34 @@ class UI {
     name.value = store.get('uno.name') || '';
     const params = new URLSearchParams(location.search);
     const urlPin = params.get('pin') || store.get('uno.pin', sessionStorage);
-    if (urlPin && /^\d{6}$/.test(urlPin)) { pin.value = urlPin; $('#join-box').hidden = false; }
+    if (!this.room && urlPin && /^\d{6}$/.test(urlPin)) { pin.value = urlPin; $('#join-box').hidden = false; }
     $('#local-badge').hidden = !isLocalMode;
+    const password = $('#room-password');
+    if (this.room) {
+      document.title = `${codeLabel(this.room)} · Uno`;
+      $('.tagline').textContent = `Private room ${codeLabel(this.room)}. Type your name and join.`;
+      $('#home-actions').hidden = true;
+      $('#room-box').hidden = false;
+      $('#btn-room-join').textContent = `Join ${codeLabel(this.room)}`;
+    }
 
     const refresh = () => {
       const ok = sanitizeName(name.value).length > 0;
       $('#btn-host').disabled = !ok;
       $('#btn-join-toggle').disabled = !ok;
       $('#btn-join').disabled = !ok || !/^\d{6}$/.test(pin.value);
+      $('#btn-room-join').disabled = !ok;
+      $('#btn-room-host').disabled = !ok;
+      $('#btn-room-open').disabled = !ok || !password.value;
+      if (this.room) $('#btn-room-host').textContent = savedTicket() ? `Open ${codeLabel(this.room)} (host)` : "I'm the host";
       const saved = Host.loadSaved();
-      $('#resume-box').hidden = !saved;
-      if (saved) $('#resume-pin').textContent = saved.pin;
+      const show = saved && (!this.room || saved.pin === this.room);
+      $('#resume-box').hidden = !show;
+      if (show) $('#resume-pin').textContent = codeLabel(saved.pin);
     };
     this.refreshHome = refresh;
     name.addEventListener('input', refresh);
+    password.addEventListener('input', refresh);
     pin.addEventListener('input', () => { pin.value = pin.value.replace(/\D/g, '').slice(0, 6); refresh(); });
     refresh();
 
@@ -695,7 +772,19 @@ class UI {
     $('#btn-resume').addEventListener('click', () => this.host(Host.loadSaved()));
     $('#btn-discard').addEventListener('click', () => { store.del(SAVE_KEY); refresh(); });
     $('#btn-join-toggle').addEventListener('click', () => { $('#join-box').hidden = false; pin.focus(); });
-    $('#home-form').addEventListener('submit', (e) => { e.preventDefault(); if (!$('#btn-join').disabled) this.join(pin.value); });
+    $('#home-form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      if (!this.room) { if (!$('#btn-join').disabled) this.join(pin.value); }
+      else if (document.activeElement === password) { if (!$('#btn-room-open').disabled) this.openRoom(); }
+      else if (!$('#btn-room-join').disabled) this.join(this.room);
+    });
+    $('#btn-room-host').addEventListener('click', () => {
+      if (savedTicket()) { this.host(null, this.room); return; }
+      $('#room-login').hidden = false;
+      password.focus();
+    });
+    $('#btn-room-open').addEventListener('click', () => this.openRoom());
+    $('#btn-room-cancel').addEventListener('click', () => this.stopWaiting());
 
     // Lobby
     $('#btn-copy-pin').addEventListener('click', () => this.copy(this.pin, 'PIN copied'));
@@ -745,6 +834,8 @@ class UI {
     const mode = store.get('uno.session', sessionStorage);
     if (!sanitizeName($('#name-input').value)) return;
     if (mode === 'host' && Host.loadSaved()) this.host(Host.loadSaved());
+    else if (mode === 'host' && this.room && savedTicket()) this.host(null, this.room);
+    else if (mode === 'client' && this.room && store.get('uno.pin', sessionStorage) === this.room) this.join(this.room);
     else if (mode === 'client' && /^\d{6}$/.test($('#pin-input').value)) this.join($('#pin-input').value);
   }
 
@@ -755,16 +846,34 @@ class UI {
   }
 
   busy(on, text = '') {
-    for (const id of ['#btn-host', '#btn-join', '#btn-join-toggle', '#btn-resume']) $(id).disabled = on;
+    for (const id of ['#btn-host', '#btn-join', '#btn-join-toggle', '#btn-resume', '#btn-room-join', '#btn-room-host', '#btn-room-open']) $(id).disabled = on;
+    $('#btn-room-cancel').hidden = true;
     $('#home-error').textContent = text;
     $('#home-error').classList.toggle('info', on);
   }
 
-  async host(saved = null) {
+  // Owner of the private room: check the password with the server, then open it.
+  async openRoom() {
+    const password = $('#room-password');
+    if (!this.myName()) return;
+    this.busy(true, 'Checking the password…');
+    try {
+      await login(password.value);
+    } catch (err) {
+      this.busy(false, err.message);
+      this.refreshHome();
+      return;
+    }
+    password.value = '';
+    $('#room-login').hidden = true;
+    this.host(null, this.room);
+  }
+
+  async host(saved = null, room = null) {
     const name = this.myName();
     if (!name) return;
-    this.busy(true, saved ? `Resuming game ${saved.pin}…` : 'Creating game…');
-    const h = new Host(name, this, saved);
+    this.busy(true, saved ? `Resuming game ${codeLabel(saved.pin)}…` : room ? `Opening ${codeLabel(room)}…` : 'Creating game…');
+    const h = new Host(name, this, saved, room);
     try {
       this.session = h;
       this.pin = await h.start();
@@ -780,6 +889,7 @@ class UI {
   }
 
   inviteLink() {
+    if (isRoom(this.pin)) return roomLink(this.pin);
     const u = new URL(location.href);
     u.search = '';
     u.searchParams.set('pin', this.pin);
@@ -801,7 +911,17 @@ class UI {
           await c.join(pin);
           break;
         } catch (err) {
-          if (err.fromHost || attempt >= 1 || this.session !== c) throw err;
+          if (this.session !== c) throw err;
+          // Private room not open yet: keep waiting until the host opens it.
+          if (err.code === 'no-host' && isRoom(pin)) {
+            this.busy(true, `Waiting for the host to open ${codeLabel(pin)}…`);
+            $('#btn-room-cancel').hidden = false;
+            await new Promise((r) => setTimeout(r, RETRY_MS));
+            if (this.session !== c) throw err;
+            attempt = -1;
+            continue;
+          }
+          if (err.fromHost || attempt >= 1) throw err;
           this.busy(true, 'Connection failed, retrying…');
           await new Promise((r) => setTimeout(r, 1500));
         }
@@ -809,11 +929,19 @@ class UI {
       store.set('uno.session', 'client', sessionStorage);
       this.busy(false);
     } catch (err) {
+      if (this.session !== c) return; // stopped waiting, or left
       c.close();
       this.session = null;
       store.del('uno.session', sessionStorage);
       this.busy(false, err.message);
     }
+    this.refreshHome();
+  }
+
+  stopWaiting() {
+    if (this.session instanceof Client) this.session.close();
+    this.session = null;
+    this.busy(false);
     this.refreshHome();
   }
 
@@ -861,6 +989,7 @@ class UI {
 
   hostAway(on) {
     this.hostIsAway = on;
+    if (on && this.state && this.state.phase === 'lobby') $('#lobby-status').textContent = 'The host left. Waiting for them to come back…';
     this.rerender();
   }
 
@@ -916,8 +1045,8 @@ class UI {
     const items = [];
     if (this.pin) {
       const b = document.createElement('b');
-      b.textContent = this.pin;
-      items.push(line('sys', 'Invite friends with PIN ', b));
+      b.textContent = isRoom(this.pin) ? `${location.host}/${this.pin}` : this.pin;
+      items.push(line('sys', isRoom(this.pin) ? 'Friends join at ' : 'Invite friends with PIN ', b));
     }
     for (const e of this.chatLines) {
       if (e.kind === 'sys') { items.push(line('sys', e.text)); continue; }
@@ -997,7 +1126,10 @@ class UI {
 
 
   renderLobby(state, me, isHost) {
-    $('#pin-display').replaceChildren(...Array.from(this.pin || '').map((d) => Object.assign(document.createElement('span'), { textContent: d })));
+    const room = isRoom(this.pin);
+    $('#pin-label').textContent = room ? 'Private room' : 'Game PIN';
+    $('#btn-copy-pin').hidden = room;
+    $('#pin-display').replaceChildren(...Array.from(codeLabel(this.pin || '')).map((d) => Object.assign(document.createElement('span'), { textContent: d })));
     for (const input of document.querySelectorAll('#rules input')) {
       input.checked = !!state.rules[input.dataset.rule];
       input.disabled = !isHost;
@@ -1035,7 +1167,7 @@ class UI {
     $('#btn-add-bot').hidden = !isHost;
     $('#btn-add-bot').disabled = state.players.length >= MAX_PLAYERS;
     $('#lobby-status').textContent = isHost
-      ? (enough ? 'Ready when you are.' : 'Share the PIN, or add a bot to play right away.')
+      ? (enough ? 'Ready when you are.' : room ? `Waiting for players to open /${this.pin}, or add a bot.` : 'Share the PIN, or add a bot to play right away.')
       : 'Waiting for the host to start the game…';
   }
 
@@ -1060,7 +1192,7 @@ class UI {
       const names = away.map((p) => (p.id === me ? 'you' : p.name)).join(', ');
       $('#pause-text').textContent = this.hostIsAway && !this.isHost
         ? `Paused: the host (${away.find((p) => p.host)?.name || 'host'}) is away. Waiting for them to come back…`
-        : `Paused: waiting for ${names} to come back…${this.isHost && this.pin ? ` They can rejoin with PIN ${this.pin}.` : ''}`;
+        : `Paused: waiting for ${names} to come back…${this.isHost && this.pin ? (isRoom(this.pin) ? ` They can rejoin at /${this.pin}.` : ` They can rejoin with PIN ${this.pin}.`) : ''}`;
       $('#btn-continue').hidden = !(this.session instanceof Host);
       $('#btn-invite').hidden = !(this.session instanceof Host);
     }
