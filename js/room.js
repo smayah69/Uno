@@ -1,4 +1,4 @@
-// Private rooms: /itc1 and /itc2 are fixed game addresses that only the owner
+// Private room: /itc1 is a fixed game address that only the owner
 // can open (password checked by api/itc.js). Players type their name and join;
 // their browser checks with the server that the host really is the owner.
 //
@@ -7,10 +7,10 @@
 
 import { isLocalMode } from './net.js';
 
-export const ROOMS = ['itc1', 'itc2'];
+export const ROOMS = ['itc1']; // add 'itc2' here and in api/itc.js + vercel.json for a second room
 export const isRoom = (code) => ROOMS.includes(code);
 export const codeLabel = (code) => code.toUpperCase(); // 'itc1' -> 'ITC1', PINs unchanged
-const TICKET_KEY = 'itc.ticket';
+const TICKET_KEY = 'uno.itc.ticket';
 
 // The room this page is for (/itc1 -> 'itc1'), or null on the normal site.
 export function roomFromPath(path = location.pathname) {

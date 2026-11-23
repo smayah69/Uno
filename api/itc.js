@@ -1,7 +1,7 @@
-// Vercel function behind the private rooms /itc1 and /itc2.
+// Vercel function behind the private room /itc1.
 //
 // Only the owner (who knows ITC_PASSWORD, set in the Vercel project's
-// environment variables) can open a room, and players' browsers check that
+// environment variables) can open the room, and players' browsers check that
 // whoever answers at the room's address really is the owner:
 //
 //   login  {password}            -> {ticket}  the owner's browser keeps it (30 days)
@@ -13,7 +13,7 @@
 
 const crypto = require('crypto');
 
-const ROOMS = new Set(['itc1', 'itc2']);
+const ROOMS = new Set(['itc1']);
 const TICKET_TTL = 30 * 24 * 3600; // seconds
 const FAIL_DELAY = 1000;           // slows down password guessing a little
 
@@ -38,7 +38,7 @@ async function handler(req, res) {
   const send = (code, body) => { res.statusCode = code; res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify(body)); };
   if (req.method !== 'POST') { res.setHeader('Allow', 'POST'); return send(405, { error: 'Method not allowed' }); }
   const k = key();
-  if (!k) return send(503, { error: 'Rooms are not set up (ITC_PASSWORD is missing on the server)' });
+  if (!k) return send(503, { error: 'The room is not set up (ITC_PASSWORD is missing on the server)' });
 
   let b = req.body;
   if (typeof b === 'string' || Buffer.isBuffer(b)) { try { b = JSON.parse(b); } catch { b = null; } }

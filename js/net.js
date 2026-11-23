@@ -3,7 +3,7 @@
 //
 // - PeerNet: WebRTC via PeerJS (public broker is only used for signaling).
 //   The host registers the peer id `uno-p2p-v1-<PIN>` (or `uno-p2p-v1-itc1`
-//   for the private rooms, see room.js).
+//   for the private room, see room.js).
 // - LocalNet: BroadcastChannel between tabs of the same browser, enabled with
 //   ?local=1. Same message flow, no internet needed (handy for testing).
 //

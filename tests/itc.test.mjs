@@ -45,7 +45,7 @@ test('itc: login, prove, check', async () => {
 
   // The proof is bound to the room and the player's challenge.
   assert.equal((await call({ op: 'check', room: 'itc1', nonce, proof })).data.ok, true);
-  assert.equal((await call({ op: 'check', room: 'itc2', nonce, proof })).data.ok, false);
+  assert.equal((await call({ op: 'check', room: 'itc2', nonce, proof })).status, 400); // no such room
   assert.equal((await call({ op: 'check', room: 'itc1', nonce: 'cd'.repeat(16), proof })).data.ok, false);
   assert.equal((await call({ op: 'check', room: 'itc1', nonce, proof: 'x' })).data.ok, false);
   assert.equal((await call({ op: 'check', room: 'itc1', nonce })).data.ok, false);
@@ -65,7 +65,7 @@ test('itc: expired ticket is refused', async () => {
   const realNow = Date.now;
   Date.now = () => realNow() + 31 * 24 * 3600 * 1000;
   try {
-    assert.equal((await call({ op: 'prove', ticket, room: 'itc2', nonce })).status, 401);
+    assert.equal((await call({ op: 'prove', ticket, room: 'itc1', nonce })).status, 401);
   } finally {
     Date.now = realNow;
   }

@@ -50,7 +50,7 @@ function secureRandom() {
 // viewFor(state, theirSeat).
 // ===================================================================
 class Host {
-  // room: open the private room /itc1 or /itc2 instead of a random PIN.
+  // room: open the private room /itc1 instead of a random PIN.
   constructor(name, ui, saved = null, room = null) {
     this.ui = ui;
     this.net = createHostNet();
@@ -83,10 +83,10 @@ class Host {
       this.state.players.push({ id: 'p0', name, seat: -1, connected: true, host: true });
       this.resumePin = room;
     }
-    this.logged = this.state.eventId;
     this.room = isRoom(this.resumePin) ? this.resumePin : null;
     this.ticket = this.room ? savedTicket() : null;
     this.proving = new Set();   // connection ids waiting for the server to sign their challenge
+    this.logged = this.state.eventId;
   }
 
   static loadSaved() {
@@ -711,6 +711,7 @@ class UI {
     this.chatLines = [];
     this.unread = 0;
     this.endShown = false;
+    this.room = roomFromPath();
     const send = (fn) => (...args) => this.session && this.session[fn](...args);
     this.table = new TableView({
       actions: {
@@ -726,7 +727,6 @@ class UI {
       toast: (text) => this.toast(text),
       turnTotal: TURN_MS,
     });
-    this.room = roomFromPath();
     this.bind();
     this.autoResume();
   }
@@ -742,7 +742,7 @@ class UI {
     const password = $('#room-password');
     if (this.room) {
       document.title = `${codeLabel(this.room)} · Uno`;
-      $('.tagline').textContent = `Private room ${codeLabel(this.room)}. Type your name and join.`;
+      $('.tagline').textContent = `Private room ${codeLabel(this.room)}`;
       $('#home-actions').hidden = true;
       $('#room-box').hidden = false;
       $('#btn-room-join').textContent = `Join ${codeLabel(this.room)}`;
@@ -1167,7 +1167,7 @@ class UI {
     $('#btn-add-bot').hidden = !isHost;
     $('#btn-add-bot').disabled = state.players.length >= MAX_PLAYERS;
     $('#lobby-status').textContent = isHost
-      ? (enough ? 'Ready when you are.' : room ? `Waiting for players to open /${this.pin}, or add a bot.` : 'Share the PIN, or add a bot to play right away.')
+      ? (enough ? 'Ready when you are.' : room ? `Friends join at /${this.pin}, or add a bot to play right away.` : 'Share the PIN, or add a bot to play right away.')
       : 'Waiting for the host to start the game…';
   }
 
