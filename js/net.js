@@ -7,8 +7,9 @@
 // - LocalNet: BroadcastChannel between tabs of the same browser, enabled with
 //   ?local=1. Same message flow, no internet needed (handy for testing).
 //
-// Clients call connect() again after a drop to reconnect; a host that comes
-// back calls start(pin) to reclaim its old PIN. A missing host rejects with
+// Clients call connect() again after a drop to reconnect (drop() ends just
+// the link to the host, close() everything); a host that comes back calls
+// start(pin) to reclaim its old PIN. A missing host rejects with
 // err.code = 'no-host'.
 
 const PREFIX = 'uno-p2p-v1-';
@@ -23,7 +24,6 @@ const ICE = {
     { urls: 'stun:stun.cloudflare.com:3478' },
     { urls: ['turn:eu-0.turn.peerjs.com:3478', 'turn:us-0.turn.peerjs.com:3478'], username: 'peerjs', credential: 'peerjsp' },
   ],
-  sdpSemantics: 'unified-plan',
 };
 const RECLAIM_TRIES = 30;     // host resuming: the broker frees a dead id after ~a minute
 const RECLAIM_DELAY = 3000;
@@ -38,6 +38,13 @@ export function randomId(bytes = 16) {
   const a = new Uint8Array(bytes);
   crypto.getRandomValues(a);
   return [...a].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+// Math.random-like, from the OS's random generator (shuffles, bots).
+export function secureRandom() {
+  const a = new Uint32Array(1);
+  crypto.getRandomValues(a);
+  return a[0] / 2 ** 32;
 }
 
 // ---- PeerJS -------------------------------------------------------------
@@ -112,71 +119,119 @@ class PeerHost {
   }
 }
 
+const NO_GAME = 'No game found with that PIN. Check it, and that the host still has the game open.';
+const NO_LINK = 'Found the game but could not connect to the host. One of you may be on a network that blocks direct connections; try mobile data or another Wi-Fi.';
+const NO_BROKER = 'Could not reach the matchmaking server (0.peerjs.com). Check your internet connection, or disable an ad blocker / VPN.';
+
 class PeerClient {
   constructor() {
     this.onMessage = () => {};
     this.onClose = () => {};
+    this.peer = null;    // kept between attempts: one broker registration per page, not one per retry
+    this.conn = null;    // the data connection to the host
+    this.linked = false; // that connection is open
+    this.attempt = null; // the connect() in progress
   }
 
-  // Can be called repeatedly: every attempt uses a fresh Peer.
+  // The signaling (broker) side, reopened when it was lost.
+  ensurePeer() {
+    const old = this.peer;
+    if (old && !old.destroyed) {
+      if (old.disconnected) {
+        try { old.reconnect(); } catch { /* already reconnecting */ }
+      }
+      return old;
+    }
+    const peer = new window.Peer({ debug: 0, config: ICE });
+    this.peer = peer;
+    peer.on('open', () => { if (this.peer === peer && this.attempt) this.attempt.dial(); });
+    peer.on('error', (err) => { if (this.peer === peer) this.peerError(err); });
+    return peer;
+  }
+
+  peerError(err) {
+    if (err.type === 'peer-unavailable') {
+      if (this.attempt) this.attempt.fail(NO_GAME, 'no-host');
+      else this.lost(this.conn);
+    } else if (this.attempt) {
+      this.attempt.fail(friendlyError(err));
+    }
+    // Errors once linked (the broker dropping, say) don't touch the open
+    // link; the next connect() reopens what PeerJS closed.
+  }
+
+  // Can be called repeatedly: each attempt opens a new link to the host.
   connect(pin) {
-    this.dispose();
+    this.drop();
+    if (this.attempt) this.attempt.fail('Connection attempt replaced');
     return new Promise((resolve, reject) => {
-      const peer = new window.Peer({ debug: 0, config: ICE });
-      this.peer = peer;
-      let open = false;
-      let settled = false;
-      const fail = (msg, code) => {
-        if (settled) return;
-        settled = true;
+      const peer = this.ensurePeer();
+      let done = false;
+      const finish = () => {
+        done = true;
         clearTimeout(timer);
-        peer.destroy();
-        reject(Object.assign(new Error(msg), { code }));
+        if (this.attempt === attempt) this.attempt = null;
       };
-      const lost = () => {
-        if (!open || this.peer !== peer) return;
-        open = false;
-        this.onClose('Connection to host lost');
+      const attempt = {
+        fail: (msg, code) => {
+          if (done) return;
+          finish();
+          this.drop();
+          reject(Object.assign(new Error(msg), { code }));
+        },
+        dial: () => {
+          if (done || this.conn) return;
+          const conn = peer.connect(PREFIX + pin, { reliable: true, serialization: 'json' });
+          this.conn = conn;
+          conn.on('open', () => {
+            if (done || this.conn !== conn) return;
+            finish();
+            this.linked = true;
+            resolve();
+          });
+          conn.on('data', (msg) => { if (this.conn === conn) this.onMessage(msg); });
+          conn.on('close', () => this.lost(conn));
+          conn.on('error', () => this.lost(conn));
+        },
       };
-      const timer = setTimeout(() => fail(open ? 'Connection to host lost' : peer.open
-        ? 'Found the game but could not connect to the host. One of you may be on a network that blocks direct connections; try mobile data or another Wi-Fi.'
-        : 'Could not reach the matchmaking server (0.peerjs.com). Check your internet connection, or disable an ad blocker / VPN.'), CONNECT_TIMEOUT);
-      peer.on('error', (err) => {
-        if (settled) { if (err.type === 'peer-unavailable') lost(); return; }
-        if (err.type === 'peer-unavailable') fail('No game found with that PIN. Check it, and that the host still has the game open.', 'no-host');
-        else fail(friendlyError(err));
-      });
-      peer.on('open', () => {
-        const conn = peer.connect(PREFIX + pin, { reliable: true, serialization: 'json' });
-        this.conn = conn;
-        conn.on('open', () => {
-          if (settled) return;
-          settled = true;
-          open = true;
-          clearTimeout(timer);
-          resolve();
-        });
-        conn.on('data', (msg) => this.onMessage(msg));
-        conn.on('close', lost);
-        conn.on('error', lost);
-      });
+      const timer = setTimeout(() => {
+        const brokerOk = peer.open;
+        attempt.fail(brokerOk ? NO_LINK : NO_BROKER);
+        // Stuck reaching the broker: start over with a fresh registration next time.
+        if (!brokerOk && this.peer === peer) { this.peer = null; peer.destroy(); }
+      }, CONNECT_TIMEOUT);
+      this.attempt = attempt;
+      if (peer.open) attempt.dial();
     });
+  }
+
+  lost(conn) {
+    if (!conn || conn !== this.conn || !this.linked) return;
+    this.linked = false;
+    this.onClose('Connection to host lost');
   }
 
   send(msg) {
     if (this.conn && this.conn.open) this.conn.send(msg);
   }
 
-  dispose() {
+  // End the link to the host (dead, or replaced); keep the broker registration.
+  drop() {
+    const c = this.conn;
+    this.conn = null;
+    this.linked = false;
+    if (c) c.close();
+  }
+
+  close() {
+    if (this.attempt) this.attempt.fail('Closed');
+    this.drop();
     if (this.peer) {
       const p = this.peer;
       this.peer = null;
-      this.conn = null;
       p.destroy();
     }
   }
-
-  close() { this.dispose(); }
 }
 
 function friendlyError(err) {
@@ -272,6 +327,8 @@ class LocalClient {
 
   send(msg) { if (this.ch) this.ch.postMessage({ to: 'host', from: this.id, kind: 'msg', msg }); }
 
+  drop() { this.close(); }
+
   close(announce = true) {
     if (!this.ch) return;
     if (announce) this.ch.postMessage({ to: 'host', from: this.id, kind: 'leave' });
@@ -280,7 +337,8 @@ class LocalClient {
   }
 }
 
-const useLocal = new URLSearchParams(location.search).has('local');
+// (No `location` in Node, where the tests import this file.)
+const useLocal = typeof location !== 'undefined' && new URLSearchParams(location.search).has('local');
 export const isLocalMode = useLocal;
 export const createHostNet = () => (useLocal ? new LocalHost() : new PeerHost());
 export const createClientNet = () => (useLocal ? new LocalClient() : new PeerClient());

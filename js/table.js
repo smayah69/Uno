@@ -3,7 +3,7 @@
 // viewFor in game.js) and reports what you do through `actions`, so the
 // online game and the /sandbox page drive it the same way.
 import {
-  CARD_COLORS, playerBySeat, canStart, canJump, companions, couldGoToOne, sortHand, isNumber, isWild,
+  CARD_COLORS, playerBySeat, canStart, canJump, companions, couldGoToOne, sortHand, isNumber, isWild, awayPlayers,
 } from './game.js';
 import { cardEl, backEl } from './cards.js';
 import { avatar, ringSVG, setRing, seatColor, statusLabel } from './parts.js';
@@ -11,9 +11,6 @@ import { sound } from './sound.js';
 
 const $ = (sel) => document.querySelector(sel);
 const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
-
-// Players who dropped and haven't been handed to the auto-player.
-export const awayPlayers = (s) => (s.phase === 'playing' ? s.players.filter((p) => !p.connected && !p.bot) : []);
 
 // Where a card sits on the discard pile: a little messy, like a real one.
 const jitter = (id) => ({ x: ((id * 13) % 9) - 4, y: ((id * 7) % 7) - 3, r: ((id * 47) % 29) - 14 });
@@ -36,7 +33,8 @@ export class TableView {
     this.hidden = new Set();   // card ids hidden until their flying copy lands
     this.seatEls = new Map();  // seat -> elements around the table
     this.seatsKey = null;
-    this.lastTurnSeat = null;
+    this.lastTurn = null;      // turn already announced (sound): "seat|turnId"
+    this.pickReturn = null;    // what had focus before the color picker opened
     this.bind();
   }
 
@@ -60,10 +58,23 @@ export class TableView {
     }
     $('#btn-pick-cancel').addEventListener('click', () => this.closePicker());
     $('#color-picker').addEventListener('click', (e) => { if (e.target === e.currentTarget) this.closePicker(); });
+    // The picker is a modal dialog: Tab stays inside it.
+    $('#color-picker').addEventListener('keydown', (e) => {
+      if (e.key !== 'Tab') return;
+      const items = [...$('#color-picker').querySelectorAll('button')];
+      const i = items.indexOf(document.activeElement);
+      const next = e.shiftKey ? (i <= 0 ? items.length - 1 : i - 1) : (i + 1) % items.length;
+      e.preventDefault();
+      items[next].focus();
+    });
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') this.closePicker();
       // Keys (when you're not typing): U says UNO, D draws, C calls Contre-UNO.
-      if (/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName) || !this.state || this.state.phase === 'lobby') return;
+      // Not with Ctrl/Cmd/Alt: Ctrl+D (bookmark) or Cmd+C (copy) aren't moves.
+      if (e.ctrlKey || e.metaKey || e.altKey || e.repeat || e.isComposing) return;
+      const el = document.activeElement;
+      if (el && (/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName) || el.isContentEditable)) return;
+      if (!this.state || this.state.phase === 'lobby' || !$('#color-picker').hidden) return;
       if (!$('#table').offsetParent) return; // table not on screen
       const k = e.key.toLowerCase();
       if (k === 'u') this.unoClicked();
@@ -85,7 +96,7 @@ export class TableView {
     this.state = null;
     this.lastEventId = null;
     this.seatsKey = null;
-    this.lastTurnSeat = null;
+    this.lastTurn = null;
     this.selected = [];
     this.hidden.clear();
     this.closePicker();
@@ -129,9 +140,11 @@ export class TableView {
     this.renderHand(state, mySeat, myTurn, paused);
     this.renderActions(view, mySeat, myTurn, paused);
     this.renderStatus(view, mySeat, myTurn, paused);
-    if (state.phase === 'playing' && state.turn !== this.lastTurnSeat) {
-      if (state.turn === mySeat && this.lastTurnSeat !== null) sound.turn();
-      this.lastTurnSeat = state.turn;
+    // A chime when your turn starts (also when you go again after a Skip).
+    const turn = `${state.turn}|${state.turnId || 0}`;
+    if (state.phase === 'playing' && turn !== this.lastTurn) {
+      if (state.turn === mySeat && this.lastTurn !== null) sound.turn();
+      this.lastTurn = turn;
     }
     if (fresh.length) this.animate(fresh, before);
   }
@@ -494,13 +507,20 @@ export class TableView {
 
   pickColor(cb) {
     this.pickCb = cb;
+    this.pickReturn = document.activeElement;
     $('#color-picker').hidden = false;
     $('#color-picker [data-color]').focus();
   }
 
   closePicker() {
     this.pickCb = null;
-    $('#color-picker').hidden = true;
+    const picker = $('#color-picker');
+    if (picker.hidden) return;
+    picker.hidden = true;
+    // Focus goes back where it was (the card, if it's still in your hand).
+    const back = this.pickReturn;
+    this.pickReturn = null;
+    if (back && back.isConnected && typeof back.focus === 'function') back.focus();
   }
 
   // ---- animation ----

@@ -6,14 +6,16 @@
 // passes. That only affects tabs of your own browser.
 
 import { isLocalMode } from './net.js';
+import { local } from './store.js';
 
 export const ROOMS = ['itc1']; // add 'itc2' here and in api/itc.js + vercel.json for a second room
 export const isRoom = (code) => ROOMS.includes(code);
 export const codeLabel = (code) => code.toUpperCase(); // 'itc1' -> 'ITC1', PINs unchanged
 const TICKET_KEY = 'uno.itc.ticket';
+const API_MS = 8000; // give up on the server after this long (a waiting player holds a connection slot)
 
 // The room this page is for (/itc1 -> 'itc1'), or null on the normal site.
-export function roomFromPath(path = location.pathname) {
+export function roomFromPath(path = globalThis.location?.pathname || '/') {
   const m = /^\/(itc\d)\/?$/i.exec(path);
   return m && isRoom(m[1].toLowerCase()) ? m[1].toLowerCase() : null;
 }
@@ -25,7 +27,8 @@ export function roomLink(code) {
 }
 
 async function api(body) {
-  const r = await fetch('/api/itc', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const signal = typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(API_MS) : undefined;
+  const r = await fetch('/api/itc', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal });
   let d = {};
   try { d = await r.json(); } catch { /* not JSON */ }
   if (!r.ok) throw Object.assign(new Error(d.error || `Server error (${r.status})`), { status: r.status });
@@ -34,19 +37,17 @@ async function api(body) {
 
 // Owner's login, kept in this browser until it expires.
 export function savedTicket() {
-  try {
-    const t = localStorage.getItem(TICKET_KEY);
-    return t && Number(t.split('.')[0]) * 1000 > Date.now() ? t : null;
-  } catch { return null; }
+  const t = local.get(TICKET_KEY);
+  return t && Number(t.split('.')[0]) * 1000 > Date.now() ? t : null;
 }
 
 export function forgetTicket() {
-  try { localStorage.removeItem(TICKET_KEY); } catch { /* storage blocked */ }
+  local.del(TICKET_KEY);
 }
 
 export async function login(password) {
   const ticket = isLocalMode ? `${Math.floor(Date.now() / 1000) + 86400}.local` : (await api({ op: 'login', password })).ticket;
-  try { localStorage.setItem(TICKET_KEY, ticket); } catch { /* storage blocked */ }
+  local.set(TICKET_KEY, ticket);
   return ticket;
 }
 

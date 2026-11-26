@@ -1,6 +1,8 @@
 // UI pieces: avatars, the turn timer ring, status badges, the scoreboard.
+// Shared by the game (main.js) and the /sandbox page.
 import { SEAT_COLORS, playerBySeat, gameTime, formatTime, sortHand } from './game.js';
 import { cardEl } from './cards.js';
+import { sound } from './sound.js';
 
 export const seatColor = (seat) => SEAT_COLORS[seat] || '#9a9ab0';
 
@@ -34,6 +36,24 @@ export function badge(text, cls) {
   b.textContent = text;
   return b;
 }
+
+// The house rules in play, as chips for the top bar.
+const RULE_CHIPS = [['jumpIn', '≡ Jump in'], ['multi', '×2 Doubles'], ['stack', '+2 Combo']];
+export const ruleChips = (rules) => RULE_CHIPS.filter(([k]) => rules[k]).map(([, text]) => badge(text, 'rule'));
+
+// End of a round: a fanfare (or an "aww") as the last card lands, and the
+// results a moment later (RESULTS_DELAY).
+export const RESULTS_DELAY = 1700;
+export function roundEndSound(won) {
+  setTimeout(() => (won ? sound.win() : sound.lose()), 500);
+}
+
+export function resultsTitle(state, me) {
+  const winner = playerBySeat(state, state.winner);
+  return winner && winner.id === me ? 'You win the round! 🎉' : `${winner ? winner.name : '?'} wins the round`;
+}
+
+export const resultsSubtitle = (state, total) => `Round ${state.round} · ${formatTime(total)} · the winner scores the points left in everyone's hands`;
 
 // Countdown ring around an avatar (stroke-dashoffset animates 0 -> 100).
 export function ringSVG() {

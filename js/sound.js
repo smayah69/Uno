@@ -1,11 +1,12 @@
 // Synthesized sound effects (Web Audio, no files). Everything goes through a
 // small mixer: a compressor for punch and a generated room reverb for depth.
 // Muting is remembered.
+import { local } from './store.js';
+
 let ctx = null;
 let bus = null; // { dry, wet } inputs of the mixer
 let noiseBuf = null;
-let muted = false;
-try { muted = localStorage.getItem('uno.muted') === '1'; } catch { /* storage blocked */ }
+let muted = local.get('uno.muted') === '1';
 
 function audio() {
   // Browsers only allow sound after the first click or key press.
@@ -118,7 +119,7 @@ export const sound = {
   get muted() { return muted; },
   toggle() {
     muted = !muted;
-    try { localStorage.setItem('uno.muted', muted ? '1' : '0'); } catch { /* storage blocked */ }
+    local.set('uno.muted', muted ? '1' : '0');
     return muted;
   },
   // A card slapped onto the pile: air, snap, and a soft thump on the table.

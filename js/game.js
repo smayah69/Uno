@@ -82,6 +82,7 @@ export function createLobby(rules = RULES) {
     discard: [],      // played cards, top is last; a wild keeps its chosen color in `w`
     color: null,      // color to match (a wild's chosen color)
     turn: -1,
+    turnId: 0,        // goes up each time a turn starts (the turn timer restarts on it)
     dir: 1,           // 1 = clockwise (to the left), -1 after a Reverse
     pending: 0,       // stacked +2 cards waiting for the turn player (stack rule)
     drawn: null,      // id of the card the turn player just drew: they may play it
@@ -104,7 +105,12 @@ export function createLobby(rules = RULES) {
   };
 }
 
-function event(s, e) {
+// Players who dropped and haven't been handed to the auto-player: the game
+// waits for them.
+export const awayPlayers = (s) => (s.phase === 'playing' ? s.players.filter((p) => !p.connected && !p.bot) : []);
+
+// Record something that happened, for animations, sounds and the chat log.
+export function addEvent(s, e) {
   s.eventId += 1;
   s.events.push({ id: s.eventId, ...e });
   if (s.events.length > EVENTS_KEEP) s.events.shift();
@@ -113,6 +119,12 @@ function event(s, e) {
 export function nextSeat(s, from, steps = 1) {
   const n = s.players.length;
   return (((from + s.dir * steps) % n) + n) % n;
+}
+
+// A new turn starts for this seat (also when the same player goes again).
+export function setTurn(s, seat) {
+  s.turn = seat;
+  s.turnId = (s.turnId || 0) + 1;
 }
 
 export function startGame(s, rng = Math.random) {
@@ -150,10 +162,10 @@ export function startGame(s, rng = Math.random) {
   s.roundPoints = 0;
   s.round += 1;
   s.clock = { base: 0, since: null };
-  s.turn = Math.floor(rng() * k);
+  setTurn(s, Math.floor(rng() * k));
   s.phase = 'playing';
   s.note = `${nameOf(s, s.turn)} starts`;
-  event(s, { kind: 'start', seat: s.turn });
+  addEvent(s, { kind: 'start', seat: s.turn });
   return s;
 }
 
@@ -234,13 +246,12 @@ export function play(s, seat, ids, color = null, rng = Math.random) {
   s.color = isWild(last) ? color : last.c;
   s.by = seat;
   s.drawn = null;
-  s.turn = seat;
   s.stats[seat].played += cards.length;
   if (jump) s.stats[seat].jumps += 1;
   const name = nameOf(s, seat);
   const what = cards.length > 1 ? `${cards.length} × ${last.v}` : cardName(last) + (isWild(last) ? ` (${CARD_COLORS[color].name})` : '');
   s.note = jump ? `${name} jumped in with ${what}!` : `${name} played ${what}`;
-  event(s, { kind: 'play', seat, cards: played, jump });
+  addEvent(s, { kind: 'play', seat, cards: played, jump });
 
   // UNO has to be said before the play that leaves one card. Forgot? You're
   // exposed: anyone can catch you (Contre-UNO) and you draw 2, until you
@@ -248,7 +259,7 @@ export function play(s, seat, ids, color = null, rng = Math.random) {
   const left = s.hands[seat].length;
   if (left === 1 && s.armed[seat]) {
     s.uno[seat] = true;
-    event(s, { kind: 'uno', seat });
+    addEvent(s, { kind: 'uno', seat });
   } else if (left === 1) {
     s.exposed[seat] = true;
   }
@@ -262,25 +273,25 @@ export function play(s, seat, ids, color = null, rng = Math.random) {
 function applyEffect(s, seat, card, rng) {
   if (card.v === 'skip') {
     const victim = nextSeat(s, seat);
-    event(s, { kind: 'skip', seat: victim });
+    addEvent(s, { kind: 'skip', seat: victim });
     s.note += `, ${nameOf(s, victim)} is skipped`;
-    s.turn = nextSeat(s, seat, 2);
+    setTurn(s, nextSeat(s, seat, 2));
   } else if (card.v === 'rev') {
     s.dir = -s.dir;
-    event(s, { kind: 'reverse', dir: s.dir });
+    addEvent(s, { kind: 'reverse', dir: s.dir });
     // With two players a Reverse works like a Skip.
-    s.turn = s.players.length === 2 ? seat : nextSeat(s, seat);
+    setTurn(s, s.players.length === 2 ? seat : nextSeat(s, seat));
   } else if (card.v === 'd2' && s.rules.stack) {
     s.pending += 2;
-    s.turn = nextSeat(s, seat);
+    setTurn(s, nextSeat(s, seat));
   } else if (card.v === 'd2' || card.v === 'd4') {
     const victim = nextSeat(s, seat);
     const n = card.v === 'd2' ? 2 : 4;
     give(s, victim, n, rng);
     s.note += `: ${nameOf(s, victim)} draws ${n} and is skipped`;
-    s.turn = nextSeat(s, seat, 2);
+    setTurn(s, nextSeat(s, seat, 2));
   } else {
-    s.turn = nextSeat(s, seat);
+    setTurn(s, nextSeat(s, seat));
   }
 }
 
@@ -296,7 +307,7 @@ export function draw(s, seat, rng = Math.random) {
     s.pending = 0;
     give(s, seat, n, rng);
     s.note = `${name} draws ${n}`;
-    s.turn = nextSeat(s, seat);
+    setTurn(s, nextSeat(s, seat));
   } else {
     const [card] = give(s, seat, 1, rng);
     if (card && matches(card, topCard(s), s.color)) {
@@ -304,7 +315,7 @@ export function draw(s, seat, rng = Math.random) {
       s.note = `${name} drew a card`;
     } else {
       s.note = card ? `${name} drew a card and passes` : `${name} passes (no cards left to draw)`;
-      s.turn = nextSeat(s, seat);
+      setTurn(s, nextSeat(s, seat));
     }
   }
   s.seq += 1;
@@ -315,7 +326,7 @@ export function pass(s, seat) {
   if (s.phase !== 'playing' || seat !== s.turn || s.drawn === null) throw new Error('Nothing to pass');
   s.drawn = null;
   s.note = `${nameOf(s, seat)} keeps the card`;
-  s.turn = nextSeat(s, seat);
+  setTurn(s, nextSeat(s, seat));
   s.seq += 1;
 }
 
@@ -335,7 +346,7 @@ export function catchUno(s, catcher, target, rng = Math.random) {
     throw new Error('Nobody to catch there');
   }
   delete s.exposed[target];
-  event(s, { kind: 'catch', seat: catcher, target });
+  addEvent(s, { kind: 'catch', seat: catcher, target });
   give(s, target, 2, rng);
   s.stats[target].caught += 1;
   s.note = `Contre-UNO! ${nameOf(s, catcher)} caught ${nameOf(s, target)}: +2`;
@@ -355,7 +366,7 @@ function give(s, seat, n, rng) {
     s.uno[seat] = false;
     delete s.exposed[seat];
   }
-  if (got.length) event(s, { kind: 'draw', seat, n: got.length, cards: got.map((c) => ({ ...c })) });
+  if (got.length) addEvent(s, { kind: 'draw', seat, n: got.length, cards: got.map((c) => ({ ...c })) });
   return got;
 }
 
@@ -365,7 +376,7 @@ function reshuffle(s, rng) {
   const keep = s.discard.pop();
   s.deck = shuffle(s.discard.map(({ id, c, v }) => ({ id, c, v })), rng);
   s.discard = [keep];
-  event(s, { kind: 'shuffle' });
+  addEvent(s, { kind: 'shuffle' });
 }
 
 function finishRound(s, seat, rng) {
@@ -390,7 +401,7 @@ function finishRound(s, seat, rng) {
   const winner = playerBySeat(s, seat);
   s.totals[winner.id] = (s.totals[winner.id] || 0) + s.roundPoints;
   s.note = `${winner.name} wins the round!`;
-  event(s, { kind: 'win', seat, points: s.roundPoints });
+  addEvent(s, { kind: 'win', seat, points: s.roundPoints });
 }
 
 // What one player is allowed to see. seat -1: lobby or nobody.
@@ -407,6 +418,7 @@ export function viewFor(s, seat) {
     totals: { ...s.totals },
     players: s.players.map((p) => ({ ...p })),
     turn: s.turn,
+    turnId: s.turnId || 0,
     dir: s.dir,
     color: s.color,
     pending: s.pending,

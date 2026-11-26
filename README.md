@@ -56,18 +56,27 @@ Vercel can't keep WebSocket connections open, so there is no game server:
 
 ```
 js/game.js     rules engine (pure, unit tested): deck, turns, house rules, scoring, per-player views
+js/bots.js     bot moves and timing (turns, jump-ins, Contre-UNO), shared by the host and /sandbox
+js/host.js     the host: game server in the host's browser (connections, house rules, timers, saving)
+js/client.js   a player: handshake with the host, reconnecting, rendering the host's views
+js/protocol.js the messages between them, their checks, and the protocol version
+js/main.js     the page: home, lobby, game screen, chat
 js/table.js    the table: seats, pile, deck, your hand, buttons, card animations
 js/cards.js    card faces and backs (HTML + CSS, no images)
-js/parts.js    avatars, turn timer ring, scoreboard
+js/parts.js    avatars, turn timer ring, scoreboard, rule chips
 js/room.js     the private room /itc1 (client side)
 api/itc.js     the private room: owner password and host checks (Vercel function)
 js/net.js      transports: PeerJS (prod) and BroadcastChannel (?local=1, testing)
+js/store.js    localStorage / sessionStorage that never throws
 js/sound.js    synthesized sound effects (Web Audio)
 js/text.js     name and chat sanitizing
-js/main.js     host / client controllers, home, lobby, chat
 js/sandbox.js  the /sandbox test page
 fonts/         Fredoka (SIL Open Font License)
 ```
+
+After a deploy, an old tab and a new one can't play together: the hello carries a protocol version
+(`PROTOCOL` in `js/protocol.js`), and whichever page is out of date is asked to refresh. Bump it when
+messages change in a way older pages can't follow.
 
 ## Rules
 
@@ -88,7 +97,8 @@ to your UNO button to draw one card. If it fits you can play it straight away, o
 Numbers 0-9 (one 0 and two of each 1-9 per color) score their face value.
 
 **UNO and Contre-UNO:** with two cards left you have to press **UNO!** *before* the play that leaves
-you with one (the button lights up; the `U` key presses it, `D` draws, `C` calls Contre-UNO). Forget,
+you with one (the button lights up; the `U` key presses it, `D` draws, `C` calls Contre-UNO; not with
+Ctrl, Cmd or Alt held, so browser shortcuts like Ctrl+D stay what they are). Forget,
 and nothing happens right away, but you're exposed: anyone can hit **Contre-UNO!** (on your seat, or
 the red button above the deck) and you draw 2. It stays open until someone catches you or you hold
 more than one card again; saying UNO afterwards doesn't save you. This also counts for jump-ins and
@@ -117,10 +127,14 @@ player draw first. **Next round** keeps the scores; the totals show at every sea
   plays your turns quickly until you play again or press **I'm back**.
 - The host can **add bots** in the lobby, and press 🤖 on any player's avatar during a game to hand
   their seat to a bot. Bots stack, jump in, call Contre-UNO, and sometimes forget to say UNO.
+- The host can **remove** someone from the lobby (✕). They can't come straight back: not from that tab,
+  and nobody new can join under their name for 10 minutes.
 - If a player drops, the game pauses until they come back (refresh, or join again with the same PIN
   and name). The host can **Continue without them** (a bot plays for them until they return).
 - If the host drops, everyone waits while their client keeps reconnecting. The game is saved in the
-  host's browser: a refresh resumes it, or open the site again and click **Resume game**.
+  host's browser: a refresh resumes it, or open the site again and click **Resume game**. That works
+  between rounds too (on the results, or in the next round's lobby): the scores are kept, and players
+  get a minute to find their way back before their seat is given up.
 
 ### Interface
 
@@ -143,14 +157,19 @@ game (nothing goes over the network):
 - **Give a card**: any card to any player or onto the pile, and set the color to play.
 - **Players and hands**: everyone's cards (tap one to put it back), make it someone's turn, set them
   here / afk / bot / away, empty a hand.
+- The other seats play like bots in the online game (same code, `js/bots.js`).
 - **Effects** and **Sounds**: fire each animation and sound on its own.
 
 ## Develop / test
 
 ```bash
-npx serve .                          # any static server, then open http://localhost:3000
-node --test tests/*.test.mjs         # rules engine tests (incl. bot games under every rule combo) + api/itc.js
+npx serve .    # any static server, then open http://localhost:3000
+npm test       # rules engine (incl. bot games under every rule combo), bots, host, client, text, api/itc.js
 ```
+
+The tests need Node 20.11 or newer and no `npm install`. GitHub Actions runs them on every push
+(`.github/workflows/test.yml`). The host and client tests drive the real `js/host.js` and `js/client.js`
+through fake transports and mocked timers (`tests/helpers.mjs`).
 
 Add `?local=1` to the URL to play across tabs of the same browser without internet
 (BroadcastChannel). Open one tab to host and others to join. `&turnms=5000` shortens the turn timer.
@@ -165,5 +184,8 @@ A static server doesn't route `/itc1` or run `api/itc.js`; use `vercel dev` for 
   A modified host client could still peek at hands or stack the deck; fixing that would need a mental
   poker protocol or a real server.
 - The PIN is the only access control (900k space on a public broker). Fine for casual games, not a secret.
+- A connection has 10 s to say hello, and only 8 may wait at once (the oldest is dropped), so idle
+  connections can't fill a game's doors, even `/itc1`'s, whose address is public. Anyone with the PIN or
+  link can still join the lobby; the host can remove them.
 - Reconnect secrets are per tab (`sessionStorage`) and never broadcast. An away seat can also be
   reclaimed by name, so anyone with the PIN and that name could take it. Deliberate trade-off for casual play.
